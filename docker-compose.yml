@@ -1,0 +1,77 @@
+# ============================================================
+# Bu dosya, birden fazla container'i (bizim durumumuzda: API ve
+# arayuz) TEK BIR KOMUTLA birlikte ayaga kaldirmayi saglar. Her
+# birini ayri ayri "docker build" + "docker run" ile ugrasmak
+# yerine, sadece "docker-compose up" yazacagiz.
+# ============================================================
+
+# services: bu projede calisacak TUM container'lari (servisleri)
+# tanimladigimiz ana bolum.
+services:
+
+  # ------------------------------------------------------------
+  # API SERVISI: FastAPI'yi (arama mantiginin tamamini) icerir.
+  # ------------------------------------------------------------
+  api:
+    # build: bu servisin imajini NASIL olusturacagimizi belirtir.
+    build:
+      context: .                    # Dockerfile'in aradigi dosyalarin (requirements.txt, kod) bulundugu klasor - proje koku
+      dockerfile: Dockerfile.api    # hangi Dockerfile'i kullanacagi
+    # ports: "disaridaki_port:container_icindeki_port" formatinda.
+    # Yani bilgisayarindaki 8000 portuna giden istekler, container
+    # icindeki 8000 portuna YONLENDIRILIR.
+    ports:
+      - "8000:8000"
+    # volumes: bilgisayarindaki bir klasoru, container'in ICINE
+    # "baglar" (mount). NEDEN GEREKLI? "data/" klasorumuz (5.000
+    # gorsel, embedding'ler, FAISS index'leri) CIDDI BUYUKLUKTE -
+    # bunlari her seferinde IMAJIN ICINE KOPYALAMAK (COPY ile)
+    # yerine, disaridaki GERCEK klasoru dogrudan container'a
+    # baglamak, hem imaj boyutunu kucuk tutar hem de veri
+    # guncellemelerinin ANINDA yansimasini saglar (imaji yeniden
+    # olusturmaya gerek kalmadan).
+    volumes:
+      - ./data:/app/data
+      # Hugging Face model onbellegini KALICI bir Docker volume'e
+      # bagliyoruz - boylece CLIP/BLIP modelleri sadece ILK
+      # calistirmada indirilir, container yeniden baslatildiginda
+      # (ve hatta yeniden build edildiginde) TEKRAR INDIRILMEZ.
+      - hf_cache:/root/.cache/huggingface
+    # env_file: .env dosyasindaki degiskenleri (UNSPLASH_ACCESS_KEY,
+    # HF_TOKEN gibi) container'in ICINE tasir - boylece kod, disarida
+    # calisirken oldugu gibi bu anahtarlara erisebilir.
+    env_file:
+      - .env
+
+  # ------------------------------------------------------------
+  # ARAYUZ SERVISI: Streamlit'i icerir.
+  # ------------------------------------------------------------
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      # Hugging Face model onbellegini KALICI bir Docker volume'e
+      # bagliyoruz - boylece CLIP/BLIP modelleri sadece ILK
+      # calistirmada indirilir, container yeniden baslatildiginda
+      # (ve hatta yeniden build edildiginde) TEKRAR INDIRILMEZ.
+      - hf_cache:/root/.cache/huggingface
+    env_file:
+      - .env
+    # depends_on: Docker'a "ui servisini BASLATMADAN ONCE, api
+    # servisinin baslamis olmasini bekle" diyoruz. Bu, ui'nin
+    # api'ye istek atmaya calisirken api'nin HENUZ hazir olmamasi
+    # riskini azaltir (garanti etmez, ama sirali baslatma saglar).
+    environment:
+      - API_ADRESI=http://api:8000
+    depends_on:
+      - api
+# Yukarida "hf_cache" adiyla kullandigimiz volume'u burada
+# TANIMLIYORUZ - Docker'in bunu kalici bir depolama alani olarak
+# YONETMESINI sagliyor (silene kadar kalir, container'lar silinse
+# bile bu veri KAYBOLMAZ).
+volumes:
+  hf_cache:

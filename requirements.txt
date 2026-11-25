@@ -1,0 +1,33 @@
+# Embedding
+torch>=2.0.0
+open_clip_torch>=2.24.0
+transformers>=4.38.0
+Pillow>=10.0.0
+
+# Vektor arama + keyword arama
+faiss-cpu>=1.7.4
+rank-bm25>=0.2.2
+numpy>=1.24.0
+
+# API + arayuz
+fastapi>=0.110.0
+uvicorn>=0.27.0
+streamlit>=1.32.0
+requests>=2.31.0
+python-multipart>=0.0.9
+
+# Veri toplama ve yardimci
+tqdm>=4.66.0
+python-dotenv>=1.0.0
+
+# Prompt zenginlestirme (Groq bulut API'si)
+groq>=1.7.0
+
+# Gorsel uretim: yerel sd-turbo yedegi (diffusers) ve FLUX icin HF istemcisi
+diffusers>=0.40.0
+accelerate>=1.15.0
+huggingface_hub>=1.31.0
+
+# Test araclari
+pytest>=8.0.0
+matplotlib>=3.11.2

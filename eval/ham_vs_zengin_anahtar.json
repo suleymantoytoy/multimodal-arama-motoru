@@ -1,0 +1,27 @@
+[
+  {
+    "sorgu": "winged dog",
+    "zengin": "dog wearing wings",
+    "dahil": true,
+    "A": "ham",
+    "B": "zengin",
+    "ham_aday_sayisi": 8,
+    "zengin_aday_sayisi": 8,
+    "iki_kolda_ortak_fotograf": 0
+  },
+  {
+    "sorgu": "a cat with a mustache",
+    "zengin": "cat wearing mustache",
+    "dahil": true,
+    "A": "zengin",
+    "B": "ham",
+    "ham_aday_sayisi": 8,
+    "zengin_aday_sayisi": 8,
+    "iki_kolda_ortak_fotograf": 0
+  },
+  {
+    "sorgu": "a horse with horns",
+    "zengin": "a horse with horns",
+    "dahil": false
+  }
+]

@@ -1,0 +1,4030 @@
+
+
+========================================
+--- DOSYA: .\docker-compose.yml ---
+========================================
+
+# ============================================================
+# Bu dosya, birden fazla container'i (bizim durumumuzda: API ve
+# arayuz) TEK BIR KOMUTLA birlikte ayaga kaldirmayi saglar. Her
+# birini ayri ayri "docker build" + "docker run" ile ugrasmak
+# yerine, sadece "docker-compose up" yazacagiz.
+# ============================================================
+
+# services: bu projede calisacak TUM container'lari (servisleri)
+# tanimladigimiz ana bolum.
+services:
+
+  # ------------------------------------------------------------
+  # API SERVISI: FastAPI'yi (arama mantiginin tamamini) icerir.
+  # ------------------------------------------------------------
+  api:
+    # build: bu servisin imajini NASIL olusturacagimizi belirtir.
+    build:
+      context: .                    # Dockerfile'in aradigi dosyalarin (requirements.txt, kod) bulundugu klasor - proje koku
+      dockerfile: Dockerfile.api    # hangi Dockerfile'i kullanacagi
+    # ports: "disaridaki_port:container_icindeki_port" formatinda.
+    # Yani bilgisayarindaki 8000 portuna giden istekler, container
+    # icindeki 8000 portuna YONLENDIRILIR.
+    ports:
+      - "8000:8000"
+    # volumes: bilgisayarindaki bir klasoru, container'in ICINE
+    # "baglar" (mount). NEDEN GEREKLI? "data/" klasorumuz (5.000
+    # gorsel, embedding'ler, FAISS index'leri) CIDDI BUYUKLUKTE -
+    # bunlari her seferinde IMAJIN ICINE KOPYALAMAK (COPY ile)
+    # yerine, disaridaki GERCEK klasoru dogrudan container'a
+    # baglamak, hem imaj boyutunu kucuk tutar hem de veri
+    # guncellemelerinin ANINDA yansimasini saglar (imaji yeniden
+    # olusturmaya gerek kalmadan).
+    volumes:
+      - ./data:/app/data
+      # Hugging Face model onbellegini KALICI bir Docker volume'e
+      # bagliyoruz - boylece CLIP/BLIP modelleri sadece ILK
+      # calistirmada indirilir, container yeniden baslatildiginda
+      # (ve hatta yeniden build edildiginde) TEKRAR INDIRILMEZ.
+      - hf_cache:/root/.cache/huggingface
+    # env_file: .env dosyasindaki degiskenleri (UNSPLASH_ACCESS_KEY,
+    # HF_TOKEN gibi) container'in ICINE tasir - boylece kod, disarida
+    # calisirken oldugu gibi bu anahtarlara erisebilir.
+    env_file:
+      - .env
+
+  # ------------------------------------------------------------
+  # ARAYUZ SERVISI: Streamlit'i icerir.
+  # ------------------------------------------------------------
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      # Hugging Face model onbellegini KALICI bir Docker volume'e
+      # bagliyoruz - boylece CLIP/BLIP modelleri sadece ILK
+      # calistirmada indirilir, container yeniden baslatildiginda
+      # (ve hatta yeniden build edildiginde) TEKRAR INDIRILMEZ.
+      - hf_cache:/root/.cache/huggingface
+    env_file:
+      - .env
+    # depends_on: Docker'a "ui servisini BASLATMADAN ONCE, api
+    # servisinin baslamis olmasini bekle" diyoruz. Bu, ui'nin
+    # api'ye istek atmaya calisirken api'nin HENUZ hazir olmamasi
+    # riskini azaltir (garanti etmez, ama sirali baslatma saglar).
+    environment:
+      - API_ADRESI=http://api:8000
+    depends_on:
+      - api
+# Yukarida "hf_cache" adiyla kullandigimiz volume'u burada
+# TANIMLIYORUZ - Docker'in bunu kalici bir depolama alani olarak
+# YONETMESINI sagliyor (silene kadar kalir, container'lar silinse
+# bile bu veri KAYBOLMAZ).
+volumes:
+  hf_cache:
+
+========================================
+--- DOSYA: .\Dockerfile.api ---
+========================================
+
+# ============================================================
+# Bu dosya, FastAPI servisimizi (api/main.py) bir Docker container'i
+# icine paketlemek icin "tarif" (recipe) gorevi gorur. Docker, bu
+# dosyayi okuyup adim adim bir "image" (imaj) olusturur - image,
+# calisan bir programin ve TUM bagimliliklarinin (Python, kutuphaneler,
+# kodun kendisi) tek bir pakette dondurulmus hali gibi dusunulebilir.
+# ============================================================
+
+# FROM: hangi TEMEL imajdan baslayacagimizi belirtir. python:3.11-slim,
+# icinde Python 3.11 kurulu, gereksiz eklentilerden arindirilmis
+# (slim) kucuk bir Linux imaji - boylece kendi Python'umuzu sifirdan
+# kurmamiza gerek kalmiyor.
+FROM python:3.11-slim
+
+# WORKDIR: container'in ICINDE calisacagimiz klasoru belirler - tipki
+# terminalde "cd /app" yapmak gibi. Bundan sonraki tum komutlar bu
+# klasorun icinde calisir.
+WORKDIR /app
+
+# COPY: bilgisayarindaki (host) dosyalari container'in ICINE kopyalar.
+# Once SADECE requirements.txt'i kopyaliyoruz (henuz butun kodu degil) -
+# bu, Docker'in "katman onbellegi" (layer caching) mantigindan
+# faydalanmak icin bir optimizasyon: eger sadece KODUNU degistirirsen
+# (requirements.txt'i degil), Docker bu adimi TEKRAR calistirmaz,
+# onceki calistirmadan kalan sonucu kullanir - bu, image'i yeniden
+# olustururken zamandan tasarruf sağlar.
+COPY requirements.txt .
+
+# RUN: container'in ICINDE bir komut calistirir - burada pip ile
+# tum bagimliliklari kuruyoruz. --no-cache-dir: pip'in kendi
+# onbellegini TUTMAMASINI sagliyoruz, boylece image'in boyutu
+# gereksiz yere buyumez.
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Simdi PROJENIN TAMAMINI kopyaliyoruz (kod, veri, index dosyalari vb.)
+COPY . .
+
+# EXPOSE: bu container'in HANGI PORTTAN disariya konustugunu
+# BELGELIYOR (dokumantasyon amacli, gercek port acmayi asagida
+# docker-compose.yml yapacak).
+EXPOSE 8000
+
+# CMD: container BASLATILDIGINDA calistirilacak KOMUT. --host 0.0.0.0
+# ONEMLI: bu, API'nin SADECE container'in kendi icinden degil,
+# DISARIDAN da (senin bilgisayarindan, tarayicidan) erisilebilir
+# olmasini sagliyor - "127.0.0.1" yerine "0.0.0.0" kullanmak,
+# container ortamlarinda STANDART bir gerekliliktir.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+========================================
+--- DOSYA: .\Dockerfile.ui ---
+========================================
+
+# ============================================================
+# Bu dosya, Streamlit arayuzumuzu (ui/app.py) container'a paketler.
+# Mantik, Dockerfile.api ile NEREDEYSE AYNI - sadece son komut
+# (CMD) farkli, cunku bu sefer uvicorn degil streamlit calistiriyoruz.
+# ============================================================
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8501
+
+# --server.address=0.0.0.0: ayni "disaridan erisilebilir olma"
+# gerekliligi, Streamlit'in kendi parametresiyle.
+CMD ["streamlit", "run", "ui/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+
+========================================
+--- DOSYA: .\README.md ---
+========================================
+
+# Multi-Modal Semantic Search Engine
+
+A hybrid image search system that combines semantic understanding (CLIP embeddings), classical keyword matching (BM25), and a three-tier fallback architecture: search a local dataset first, fall back to a live web image source, and finally generate a new image with AI when nothing relevant exists anywhere else.
+
+## What It Does
+
+Type a query like `"a dog"` or `"a dog walking on the moon"`, or upload an image, and the system:
+
+1. **Searches locally** — runs the query through CLIP and BM25 over a 5,000-image dataset (COCO val2017), fuses both rankings with Reciprocal Rank Fusion (RRF), and returns results if the best match is confident enough.
+2. **Falls back to the web** — if the local match is too weak, it queries the Unsplash API for real photographs, then re-scores the top result with the same CLIP model to confirm it's actually relevant (not just a keyword coincidence).
+3. **Generates an image** — if neither source has anything relevant, an LLM (Groq, running Llama 3 / GPT-OSS) rewrites the query into a detailed image-generation prompt, and a diffusion model (FLUX.1-schnell, with a local fallback) generates a new image on the spot.
+
+Every result is labeled with its source — local, web, or AI-generated — so the user always knows what they're looking at.
+
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[User query: text or image] --> B{Local hybrid search<br/>CLIP + BM25 + RRF}
+    B -->|score >= threshold| C[Return local results]
+    B -->|score < threshold| D{Unsplash search}
+    D -->|found + re-scored by CLIP<br/>score >= threshold| E[Return web results]
+    D -->|empty or re-scored score too low| F[Prompt engineering<br/>Groq API]
+    F --> G[Image generation<br/>FLUX.1-schnell -> sd-turbo fallback]
+    G --> H[Return AI-generated image]
+```
+
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Embedding model | OpenCLIP (ViT-B/32) |
+| Image captioning | BLIP (Salesforce/blip-image-captioning-base) |
+| Vector search | FAISS (Flat / IVF / HNSW, benchmarked) |
+| Keyword search | rank-bm25 |
+| Result fusion | Reciprocal Rank Fusion (RRF) |
+| Web fallback | Unsplash API |
+| Prompt engineering | Groq API (cloud, OpenAI-compatible) |
+| Image generation | FLUX.1-schnell (Hugging Face), sd-turbo (local fallback) |
+| Backend | FastAPI |
+| Frontend | Streamlit |
+
+
+## Running Locally
+
+```bash
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Create a `.env` file in the project root:
+```
+UNSPLASH_ACCESS_KEY=your_key_here
+HF_TOKEN=your_token_here
+GROQ_API_KEY=your_key_here
+```
+
+Start the API (in one terminal):
+```bash
+uvicorn api.main:app --reload
+```
+
+Start the UI (in a second terminal):
+```bash
+streamlit run ui/app.py
+```
+
+Open `http://localhost:8501` in your browser.
+
+## API Endpoints
+
+- `GET /health` — service health check
+- `POST /search/text` — `{"sorgu": "a dog", "k": 5}` → hybrid search across all three tiers
+- `POST /search/image` — upload an image, get visually similar results (also falls back through the web/generation tiers if the local match is weak)
+
+Interactive API docs available at `http://localhost:8000/docs` while the API is running.
+
+## Evaluation
+
+The retrieval quality of the local layer was measured on a 50-query test set (derived from BLIP captions, seed=42 for reproducibility) using standard information retrieval metrics.
+
+| Approach | Precision@5 | Recall@5 | MRR |
+|---|---|---|---|
+| CLIP only | 0.1000 | 0.5000 | 0.3680 |
+| BM25 only | 0.1880 | 0.9400 | 0.8783 |
+| Hybrid (RRF) | 0.1640 | 0.8200 | 0.6213 |
+
+**Note on BM25's high score:** the test queries were built from the *full* BLIP caption of each image, which gives BM25 an artificial advantage (near-exact keyword matches). This does not reflect real-world usage, where queries are short and imprecise — under those conditions, **Note on the first table:** its queries were built from BLIP captions, the same text BM25 indexes, which gave BM25 an artificial advantage. To remove that bias, two additional test sets were built from COCO's human-written annotations (independent of BLIP):
+
+| Approach | Precision@5 (77 category queries) | Recall@5 (200 human captions) | MRR@5 (200 human captions) |
+|---|---|---|---|
+| CLIP only | 0.873 | 0.655 | 0.523 |
+| BM25 only | 0.852 | 0.210 | 0.113 |
+| Hybrid (RRF) | 0.904 | 0.575 | 0.380 |
+
+Random selection would score Precision@5 = 0.031. Paired bootstrap (10,000 resamples, 95% intervals) shows that hybrid beats BM25 clearly on human captions, is statistically indistinguishable from CLIP on short category queries, and is **worse than CLIP alone on human-written captions**. The hybrid's advantage is therefore not established by these measurements. Details: `docs/karar_gunlugu.md`.. Full analysis in `docs/eval_raporu.md`.
+
+Vector index types (Flat, IVF, HNSW) were also benchmarked for speed/accuracy trade-off — HNSW was selected as the production default (~8x faster than brute-force Flat search with ~95-97% result overlap). Full numbers in `docs/karar_gunlugu.md`.
+
+## Known Limitations
+
+- **Docker:** `Dockerfile.api`, `Dockerfile.ui`, and `docker-compose.yml` are included and the architecture was verified working in earlier builds (both services started, communicated, and served requests correctly). However, this development environment (Windows + third-party antivirus + Docker Desktop) hit a series of unrelated infrastructure issues that could not be fully resolved without disproportionate time investment. The system is therefore demonstrated running locally via `uvicorn` + `streamlit` rather than via `docker-compose up`.
+- **Reverse image search:** the system does not find real, existing images of a specific character or subject across the web (like Google Images' "search by image"). It performs semantic similarity search and AI generation, not web-scale visual entity matching — that would require a separate paid API (Google Cloud Vision, Bing Visual Search, TinEye).
+- **CLIP's known weaknesses:** occasional confusion between texture and subject (e.g. fur patterns vs. animals), and lower confidence on abstract or highly compositional queries. Documented with examples in `docs/karar_gunlugu.md`.
+
+## Project Structure
+
+```
+docs/           # Decision log, evaluation report
+data/           # Dataset, embeddings, FAISS indices (not committed)
+embeddings/     # CLIP encoder, BLIP caption generator
+index/          # FAISS index setup, BM25 index, benchmarks
+search/         # Hybrid search, RRF, external search, prompt engineering, image generation
+eval/           # Test set and evaluation script
+api/            # FastAPI service
+ui/             # Streamlit interface
+```
+
+## Decision Log
+
+Every architectural decision made during this project — including ones that were tried and reversed — is recorded in `docs/karar_gunlugu.md`, in the order they happened.
+
+========================================
+--- DOSYA: .\tek_dosyada_butun_kodlar.py ---
+========================================
+
+import os
+
+with open("sadece_kodlar.txt", "w", encoding="utf-8") as cikti_dosyasi:
+    for kok_dizin, klasorler, dosyalar in os.walk("."):
+        # Veri, ortam ve eval klasörlerini atla (sadece ana mimari kodları gelsin)
+        if any(haric in kok_dizin for haric in [".git", "venv", "env", "__pycache__", "data", "val2017", "eval", ".pytest_cache"]):
+            continue
+            
+        for dosya in dosyalar:
+            # Sadece Python, Markdown ve Docker dosyalarını al (.json hariç)
+            if dosya.endswith((".py", ".md", "Dockerfile.api", "Dockerfile.ui", ".yml")): 
+                dosya_yolu = os.path.join(kok_dizin, dosya)
+                cikti_dosyasi.write(f"\n\n{'='*40}\n--- DOSYA: {dosya_yolu} ---\n{'='*40}\n\n")
+                try:
+                    with open(dosya_yolu, "r", encoding="utf-8") as f:
+                        cikti_dosyasi.write(f.read())
+                except Exception:
+                    cikti_dosyasi.write("Dosya okunamadi.\n")
+
+========================================
+--- DOSYA: .\api\main.py ---
+========================================
+
+# ============================================================
+# Bu dosya, projenin FastAPI servisini olusturur. Su ana kadar
+# yazdigimiz tum arama mantigini (akilli_ara: yerel -> harici ->
+# uretim) bir HTTP API'sinin arkasina koyuyoruz - boylece Streamlit
+# arayuzu, Docker container'i veya baska herhangi bir istemci
+# (mobil uygulama dahil) bu API'ye istek atarak arama yapabilir.
+#
+# FASTAPI NEDIR? Python'da hizli, modern bir web API framework'u.
+# Fonksiyonlarimizin ustune "decorator" (@app.post gibi) ekleyerek,
+# onlari otomatik olarak HTTP endpoint'lerine ceviriyor - ayrica
+# kendiliginden bir test arayuzu (Swagger, /docs adresinde) uretiyor.
+# ============================================================
+
+import sys
+import os
+
+# search klasorundeki akilli_ara() fonksiyonunu import edebilmek
+# icin, o klasoru Python'un arama yoluna ekliyoruz.
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "search"))
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from pydantic import BaseModel
+from typing import Optional
+
+# FastAPI uygulamasini olusturuyoruz - title/description, Swagger
+# arayuzunda (/docs) gorunecek basliktir.
+app = FastAPI(
+    title="Multi-Modal Semantik Arama API",
+    description="Metin veya gorsel ile CLIP+BM25+RRF hibrit arama, "
+                 "yerelde bulunamazsa Unsplash'e, o da bulamazsa "
+                 "AI goersel uretimine duser.",
+)
+
+
+# ------------------------------------------------------------
+# Pydantic MODELI: FastAPI, bir istegin GOVDESININ (body) nasil
+# gorunmesi gerektigini bilmek icin boyle bir "sema" (schema) sinifi
+# ister. Kullanici /search/text endpoint'ine istek atarken, govdede
+# {"sorgu": "...", "k": 10} seklinde bir JSON gondermesi gerekecek -
+# bu sinif, o JSON'un YAPISINI tanimliyor. FastAPI, gelen veriyi
+# OTOMATIK olarak bu sinifin kurallarina gore DOGRULAR (orn. "sorgu"
+# eksikse, otomatik olarak anlamli bir hata doner - bizim elle
+# kontrol etmemize gerek kalmaz).
+# ------------------------------------------------------------
+class MetinSorgusu(BaseModel):
+    sorgu: str
+    k: Optional[int] = 10  # k belirtilmezse varsayilan 10 kullanilir
+
+
+# ------------------------------------------------------------
+# Bu degiskenler, "akilli_ara" fonksiyonunu SADECE ILK ISTEKTE
+# import edip, sonrasinda tekrar tekrar KULLANMAK icin var. Boyle
+# yapmazsak, her istek geldiginde CLIP/BLIP modellerini yeniden
+# yuklemeye calisirdik - bu ÇOK YAVAS olurdu. "Lazy loading"
+# (tembel yukleme) denen bu yontem, ilk istegi biraz yavaslatir
+# ama sonraki TUM istekleri hizlandirir.
+# ------------------------------------------------------------
+_akilli_ara = None
+
+
+def _arama_fonksiyonunu_yukle():
+    """
+    hybrid_search modulundeki akilli_ara fonksiyonunu, SADECE
+    ilk cagrildiginda import eder ve bir daha import etmez -
+    boylece FastAPI baslatilirken degil, ILK ARAMA ISTEGI
+    geldiginde modeller yuklenir (bu, API'nin baslatma suresini
+    kisaltir, ama ilk arama biraz gecikmeli olur - kabul edilebilir
+    bir trade-off).
+    """
+    global _akilli_ara
+    if _akilli_ara is None:
+        from hybrid_search import akilli_ara
+        _akilli_ara = akilli_ara
+    return _akilli_ara
+
+
+# ------------------------------------------------------------
+# ENDPOINT 1: Saglik kontrolu (health check)
+# Bu, "API ayakta mi, calisiyor mu" diye kontrol etmek icin
+# kullanilan STANDART bir endpoint - gercek sistemlerde (Docker,
+# Kubernetes gibi ortamlarda) servisin hayatta olup olmadigini
+# otomatik kontrol etmek icin kullanilir.
+# ------------------------------------------------------------
+@app.get("/health")
+def saglik_kontrolu():
+    return {"durum": "calisiyor"}
+
+
+# ------------------------------------------------------------
+# ENDPOINT 2: Metin ile arama
+# POST istegi kullaniyoruz (GET degil) cunku istemci bize bir
+# "govde" (body - sorgu metni gibi) gonderiyor; GET istekleri
+# genelde govde tasimaz, sadece URL parametreleri tasir.
+# ------------------------------------------------------------
+@app.post("/search/text")
+def metin_ile_ara(istek: MetinSorgusu):
+    """
+    istek: MetinSorgusu sinifina uygun bir JSON govdesi
+    (orn. {"sorgu": "a dog", "k": 5}) - FastAPI bunu OTOMATIK
+    olarak Python objesine cevirir, biz dogrudan istek.sorgu
+    seklinde erisebiliriz.
+    """
+    akilli_ara = _arama_fonksiyonunu_yukle()
+
+    try:
+        sonuc = akilli_ara(istek.sorgu, k=istek.k)
+        return sonuc
+    except Exception as hata:
+        # HTTPException: FastAPI'ye ozel bir hata turu - bu,
+        # istemciye DUZGUN bir HTTP hata kodu (500 = sunucu hatasi)
+        # ve anlamli bir mesajla cevap donmemizi saglar, ham bir
+        # Python hatasi/traceback GORUNMEZ istemciye.
+        raise HTTPException(status_code=500, detail=f"Arama sirasinda hata: {hata}")
+
+
+# ------------------------------------------------------------
+# ENDPOINT 3: Gorsel ile arama
+# Burada govde JSON degil, bir DOSYA YUKLEMESI (multipart/form-data)
+# - bu yuzden Pydantic modeli yerine FastAPI'nin UploadFile turunu
+# kullaniyoruz.
+# ------------------------------------------------------------
+@app.post("/search/image")
+async def gorsel_ile_ara(dosya: UploadFile = File(...), k: int = 10, esik: float = 0.75):
+    # NOT: Gorsel-gorsel CLIP karsilastirmalari, metin-gorsel
+    # karsilastirmalardan DOGAL OLARAK daha yuksek skorlar uretir -
+    # CLIP, iki gorsel arasinda renk/kompozisyon gibi yuzeysel
+    # ozellikleri bile "benzerlik" olarak sayabiliyor. Bu yuzden
+    # metin aramasinda kullandigimiz esik (0.25) burada COK DUSUK
+    # kaliyor - test edildi: alakasiz bir anime karakteri ile COCO
+    # veri setindeki bir vazo gorseli arasinda bile 0.57 gibi
+    # YANILTICI YUKSEK bir skor cikti. 0.75, ilk kalibrasyon olarak
+    # kondu - daha fazla ornekle test edilip ayarlanabilir.
+    """
+    ONCEKI VERSIYONDAN FARKI: Artik skor kontrolu yapiyor. Yuklenen
+    gorsel, yerel veri setimizle (COCO - gercek fotograflar) YETERINCE
+    benzemiyorsa (orn. bir anime/cizim karakteri yuklendiyse), sonuc
+    ALAKASIZ olabiliyordu. Simdi:
+      1. Once yerelde ara, EN IYI skoru kontrol et.
+      2. Skor esigin USTUNDEYSE: yerel sonuclari dondur (eskisi gibi).
+      3. Skor esigin ALTINDAYSA: BLIP ile yuklenen gorseli TARIF ET
+         (bir caption uret), sonra bu caption'i akilli_ara()'ya
+         gonder - bu da otomatik olarak harici (Unsplash) veya
+         uretim (AI) katmanlarina duser, tipki metin aramasinda
+         oldugu gibi.
+    """
+    sys.path.append(os.path.join(os.path.dirname(__file__), "..", "embeddings"))
+    from clip_encoder import encode_image
+    from hybrid_search import _hnsw_index, _clip_dosya_yollari, akilli_ara
+
+    try:
+        gecici_yol = f"./_gecici_{dosya.filename}"
+        icerik = await dosya.read()
+        with open(gecici_yol, "wb") as f:
+            f.write(icerik)
+
+        sorgu_vektoru = encode_image(gecici_yol).reshape(1, -1).astype("float32")
+
+        # D: benzerlik skorlari, I: index numaralari
+        D, I = _hnsw_index.search(sorgu_vektoru, k)
+        en_iyi_skor = float(D[0][0])
+
+        if en_iyi_skor >= esik:
+            # Yerelde YETERINCE benzer bir sey var - eskisi gibi devam.
+            sonuclar = [_clip_dosya_yollari[i] for i in I[0]]
+            os.remove(gecici_yol)
+            return {
+                "kaynak": "yerel_gorsel_arama",
+                "en_iyi_skor": en_iyi_skor,
+                "sonuclar": sonuclar,
+            }
+
+        # Yerelde YETERSIZ - BLIP ile gorseli TARIF EDIP, o tarifi
+        # akilli_ara()'ya (metin tabanli uc katmanli zincire) gonderiyoruz.
+        print(f"[search/image] Yerel skor dusuk ({en_iyi_skor:.4f}) - BLIP ile gorsel tarif ediliyor...")
+        from caption_generator import generate_caption
+        uretilen_caption = generate_caption(gecici_yol)
+        os.remove(gecici_yol)
+
+        print(f"[search/image] Uretilen tarif: '{uretilen_caption}' - akilli_ara()'ya yonlendiriliyor...")
+        sonuc = akilli_ara(uretilen_caption, k=k, esik=esik)
+        # Kullanicinin, bu aramanin ASLINDA gorselden turetilmis bir
+        # metin sorgusuyla yapildigini bilmesi icin, uretilen caption'i
+        # da sonuca ekliyoruz.
+        sonuc["gorselden_uretilen_tarif"] = uretilen_caption
+        return sonuc
+
+    except Exception as hata:
+        raise HTTPException(status_code=500, detail=f"Gorsel arama sirasinda hata: {hata}")
+
+========================================
+--- DOSYA: .\docs\eval_raporu.md ---
+========================================
+
+# Değerlendirme Raporu (Faz 4)
+
+Bu rapor, 50 sorguluk rastgele seçilmiş bir test seti üzerinde `Sadece CLIP`, `Sadece BM25` ve `Hibrit (RRF)` yaklaşımlarının performansını değerlendirmektedir. Faz 6'da, BLIP'ten bağımsız iki ek test setiyle yapılan genişletilmiş değerlendirme aynı dosyanın ikinci yarısında yer alır.
+
+Test seti: `eval/test_sorgular.json` (BLIP caption'larından, seed=42 ile rastgele seçilmiş 50 sorgu-görsel çifti).
+Metrikler: `eval/evaluate.py` (precision@k, recall@k, MRR - elle yazılmış, standart bilgi getirimi formülleri).
+
+## Sayısal Sonuçlar (k=5)
+
+| Yaklaşım | Precision@5 | Recall@5 | MRR |
+| :--- | :--- | :--- | :--- |
+| Sadece CLIP | 0.1000 | 0.5000 | 0.3680 |
+| Sadece BM25 | 0.1880 | 0.9400 | 0.8783 |
+| Hibrit (RRF) | 0.1640 | 0.8200 | 0.6213 |
+
+Not: Her sorgunun tek bir doğru cevabı olduğu için Precision@5 teorik olarak en fazla 0.20 olabilir (5 sonuçtan en çok 1'i doğru). Bu tablodaki Precision değerleri bu tavana göre okunmalıdır.
+
+## Analiz ve Beklenmeyen Sonuçların Gerekçesi
+
+Tabloya bakıldığında BM25 modelinin hem CLIP'i hem de Hibrit yaklaşımı belirgin bir farkla geçtiği görülmektedir. Hibrit yaklaşımın en iyi sonucu vermesi beklenirken geride kalmasının nedeni, **test setinin oluşturulma metodolojisidir.**
+
+* **BM25'in Suni Başarısı:** `build_test_set.py` dosyasında, her bir test görseli için BLIP tarafından üretilen caption'ların *tamamı* hiçbir kısaltma yapılmadan doğrudan arama sorgusu olarak kullanılmıştır. BM25 bir kelime eşleştirme algoritması olduğu için, indekslediği metnin birebir aynısı aratıldığında mükemmele yakın (~%94 Recall) bir eşleşme bulmuştur. Bu, gerçek kullanıcı davranışını yansıtmayan, teste özgü bir avantajdır.
+* **CLIP'in Gerçek Performansı:** CLIP modeli, metin ile metni değil; metin ile görseli eşleştirmektedir. Kelime kopyası çekme şansı olmamasına rağmen, anlamsal uzayda ilk 5 sonuç içinde doğru görseli %50 oranında bulabilmesi, modelin multimodel anlama yeteneğinin güçlü olduğunu kanıtlamaktadır.
+* **Hibrit (RRF) Durumu:** Hibrit model, BM25'in "mükemmel" listesi ile CLIP'in anlamsal listesini birleştirdiği için, BM25'in metin eşleştirmesindeki suni avantajını bir miktar törpülemiş ve iki metrik arasında bir dengeye (0.62 MRR) oturmuştur.
+
+**Not (Faz 6 ile güncellendi):** Bu bölümün ilk halinde, gerçek kullanımda (kısa, spesifik olmayan veya hatalı sorgularda) BM25'in başarısının düşeceği ve CLIP ile Hibrit yaklaşımın öne çıkacağı öngörülmüştü. BLIP'ten bağımsız setlerle yapılan ek değerlendirme (aşağıda) bu öngörüyü **yalnızca yarısıyla** doğruladı: BM25'in başarısı gerçekten çöktü ve hem CLIP hem Hibrit onu geçti, ancak Hibrit, CLIP'i geçemedi.
+
+## Ek Değerlendirme: BLIP'ten Bağımsız Test Setleri (Faz 6)
+
+### Neden gerekti?
+
+İlk değerlendirmedeki 50 sorgu BLIP caption'larından, BM25 indeksi de aynı caption'lardan kuruluydu: BM25 fiilen kendi metnini arıyordu. Bu bölüm, COCO'nun insan yazımı anotasyonlarıyla (BLIP'ten bağımsız) kurulan iki ek test setinin sonuçlarını ve bunların istatistiksel analizini içerir. Görsel ID eşleşmesi önce ölçüldü: 5.000 görselin tamamı iki anotasyon dosyasıyla da eşleşti.
+
+### Test setleri
+
+1. **Kategori seti (77 sorgu):** "dog", "pizza" gibi kısa kategori adları. Doğru cevap: o kategoriyi içeren tüm görseller. "person" (görsellerin %54'ünde var, ölçüm anlamsız kalır) ve 20'den az görselli kategoriler (toaster, hair drier) dışarıda. Rastgele seçimle beklenen Precision@5 = 0.031.
+2. **İnsan caption seti (200 sorgu):** 200 rastgele görselin her birinin 5 insan caption'ından biri sorgu. Doğru cevap: kaynak görsel (tek hedef). Tek hedefli sette Recall@5, "ilk 5'te bulma oranı" demektir.
+3. **Dev seti (500 sorgu):** Ağırlıklı RRF denemesinde ağırlık seçimi için, test setindeki görsellerin DIŞINDAN seçildi (seed=7).
+
+Tüm sorgularda k=5; bu yüzden MRR de MRR@5'tir (ilk doğru cevap 5. sıradan aşağıdaysa 0).
+
+### Sonuçlar
+
+| Yaklaşım | P@5 (kategori) | Recall@5 (caption) | MRR@5 (caption) |
+| :--- | :--- | :--- | :--- |
+| CLIP | 0.8727 ± 0.0276 | 0.6550 ± 0.0337 | 0.5226 ± 0.0318 |
+| BM25 | 0.8519 ± 0.0290 | 0.2100 ± 0.0289 | 0.1127 ± 0.0190 |
+| Hibrit (RRF) | 0.9039 ± 0.0205 | 0.5750 ± 0.0350 | 0.3798 ± 0.0289 |
+
+(± standart hata.) Karşılaştırma için, ilk (BLIP tabanlı) setteki BM25 MRR'ı 0.8783'tü; BLIP'ten bağımsız sorgularda 0.1127'ye düştü. Yukarıdaki "BM25 yapay şekilde yüksek" analizi bu sayıyla doğrulandı.
+
+### İstatistiksel karşılaştırma (eşlemeli bootstrap)
+
+10.000 tekrar, seed=42, sorgular yerine koyarak yeniden çekildi, %95 güven aralığı.
+
+| Metrik | Karşılaştırma | Ort. fark | %95 aralık | Sonuç |
+| :--- | :--- | :--- | :--- | :--- |
+| P@5 (kategori) | Hibrit − CLIP | +0.0312 | [−0.0052, +0.0675] | Ayırt edilemiyor |
+| P@5 (kategori) | Hibrit − BM25 | +0.0519 | [+0.0078, +0.0961] | Sınırda* |
+| Recall@5 (caption) | Hibrit − CLIP | −0.0800 | [−0.1350, −0.0300] | Hibrit daha kötü |
+| Recall@5 (caption) | Hibrit − BM25 | +0.3650 | [+0.2900, +0.4400] | Hibrit daha iyi |
+| MRR@5 (caption) | Hibrit − CLIP | −0.1428 | [−0.1907, −0.0945] | Hibrit daha kötü |
+| MRR@5 (caption) | Hibrit − BM25 | +0.2671 | [+0.2160, +0.3195] | Hibrit daha iyi |
+
+\* Alt sınır 0'a çok yakın. Altı karşılaştırma yapıldığı için yaklaşık bir çoklu-karşılaştırma düzeltmesiyle aralık 0'ı içerir; bu sonuç "kesin" olarak raporlanmaz (düzeltme yaklaşıktır, tam Bonferroni değildir).
+
+### Ağırlıklı RRF denemesi
+
+BM25'e düşük ağırlık verilirse hibrit CLIP'e yetişir mi? Tasarım sonuçlar görülmeden sabitlendi: ağırlık sadece dev setinde seçildi, test setlerinde bir kez ölçüldü. CLIP ağırlığı 1.0'da sabit, BM25 ağırlığı {0, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0}; RRF k=60 ve aday havuzu (20) sabit.
+
+| BM25 ağırlığı | Dev Recall@5 | Dev MRR@5 |
+| :--- | :--- | :--- |
+| 0.0 | 0.6600 | 0.4950 |
+| 0.1 | 0.6500 | 0.4595 |
+| 0.2 | 0.6220 | 0.4184 |
+| 0.3 | 0.6020 | 0.4002 |
+| 0.5 | 0.6020 | 0.3959 |
+| 0.75 | 0.6000 | 0.3900 |
+| 1.0 | 0.5560 | 0.3679 |
+
+Eğri neredeyse tek yönlü düşüyor; seçilen ağırlık 0.0 (saf CLIP). Komşu ağırlıklar arasındaki tek tek farklar standart hata içinde, güvenilir olan eğrinin genel yönü. Test sonuçları önceki değerlerle birebir tutarlı (seçilen ağırlık CLIP ile aynı olduğu için "seçilen − eşit" karşılaştırması önceki bootstrap'in işaret çevrilmiş aynısıdır, yeni kanıt sayılmaz; bağımsız doğrulama dev setidir).
+
+### Tamamlayıcılık analizi
+
+Soru: BM25, CLIP'in kaçırdığını hiç yakalıyor mu? (İnsan caption sorguları, tek hedef.)
+
+| Ölçüm | Dev (500) | Test (200) |
+| :--- | :--- | :--- |
+| CLIP ilk 5'te buldu | %66.0 | %65.5 |
+| BM25 ilk 5'te buldu | %21.0 | %21.0 |
+| Sadece CLIP buldu (ilk 5) | 233 | 99 |
+| Sadece BM25 buldu (ilk 5) | 8 | 10 |
+| BM25 ilk 20'de buldu, CLIP ilk 20'de bulamadı | 12 (%2.4) | 9 (%4.5) |
+| Hibrit ilk 5'te buldu | %55.6 | %57.5 |
+
+Hibrit, "sadece CLIP buldu" sorgulardan dev'de 69/233, test'te 23/99 tanesini kaybetti; "sadece BM25 buldu" sorgulardan dev'de 5/8, test'te 4/10 tanesini kurtardı.
+
+### Sonuç
+
+- Cümle tarzı insan sorgularında, BLIP caption'ları üzerinde kurulan BM25 ile yapılan eşit ağırlıklı hibrit, CLIP'ten **daha kötü** (Recall ve MRR farkları güven aralıklarıyla destekleniyor) ve düşük ağırlıkla kurtarılamadı.
+- Kısa kategori sorgularında hibrit-CLIP farkı **ayırt edilemiyor**; hibritin üstünlüğü iddia edilemez.
+- Hibrit her durumda BM25'ten iyi; BM25 tek başına insan sorgularında zayıf.
+- BM25, CLIP'in ilk 20'de bulamadığı hedefleri nadiren yakalıyor; yani bu sorgu türünde yeni bilgi eklemiyor.
+- İlk analizde yazılan beklenti ("kısa, eksik kelimeli sorgularda CLIP ve hibrit öne çıkar") **yalnızca yarısıyla doğru çıktı**: ikisi de BM25'i geçiyor, ama hibrit CLIP'i geçemiyor.
+
+### Sınırlar (açıkça belirtilmeli)
+
+- İnsan caption setinde tek doğru cevap var; aynı sahneyi gösteren başka bir görsel "yanlış" sayılır, bu mutlak skorları aşağı çeker (yöntemlerin göreli kıyasını etkilemez).
+- Kategori setinde doğru cevaplar COCO anotasyonlarından geliyor; kategori anotasyonu eksik (örneğin küçük/arka plan nesne) görseller "yanlış" sayılır, Precision'ı aşağı çeker.
+- Ağırlık yalnızca insan-caption sorgularında seçildi; kategori için ayrı bir dev seti yok. Yalnızca BM25 ağırlığı arandı.
+- BM25'in zayıf olmasının NEDENİ (BLIP caption'larının kısa ve jenerik olması) bir hipotezdir, **ölçülmedi**.
+- Altı istatistiksel karşılaştırma yapıldı; sınıra yakın sonuçlar düzeltme sonrası anlamsızlaşabilir.
+- Üretim kodu (`hibrit_ara`) değiştirilmedi. Karar: hibrit mimari korunuyor, bulgu bir ablation sonucu olarak belgeleniyor; olası iyileştirme yönü BM25 metin kaynağının (örneğin daha zengin caption'lar) geliştirilmesi. COCO etiketlerini BM25 metnine eklemek kategori test setiyle sızıntı yaratacağı için tercih edilmez.
+
+## Not: Değerlendirme Kapsamı
+
+Bu rapordaki değerlendirmeler SADECE yerel katman (CLIP + BM25 + RRF) üzerinde yapılmıştır. Faz 3.5 (harici Unsplash arama) ve Faz 3.75 (AI görsel üretim) katmanları bu değerlendirmelerin kapsamı dışındadır - onlar "yerelde yoksa ne olur" sorusuna ayrı bir cevaptır, ana değerlendirme metodolojisini değiştirmez (bkz. `guncelleme_kaydi.pdf`, Bölüm 3).
+
+========================================
+--- DOSYA: .\docs\karar_gunlugu.md ---
+========================================
+
+# Karar Gunlugu
+
+Bu dosya, proje boyunca alinan her mimari kararin "neden"ini tutar.
+
+---
+
+## Faz 0 - Proje Baslangici
+
+**Tarih:** [buraya bugunun tarihini yaz]
+
+**Neden bu proje?**
+Multi-modal embedding (CLIP), vektor veritabani mimarisi (FAISS), hibrit
+bilgi getirimi (semantic + BM25 + RRF) ve objektif degerlendirme
+(precision@k, recall@k, MRR) konularini tek bir projede, uctan uca
+birlestirmek icin secildi. Amac tek bir kutuphaneyi kullanmak degil,
+sistemin ic mekanigini anlamak ve olcebilmek.
+
+**Teknoloji yigini kararlari:**
+- Embedding modeli: OpenCLIP (ViT-B/32 ile basliyoruz, gerekirse ViT-L/14'e geciyoruz)
+  - Neden: acik kaynak, iyi belgelenmis, metin ve gorseli ayni vektor uzayina goruyor
+- Vektor veritabani: FAISS (yerel, ucretsiz)
+  - Neden: sunucu gerektirmiyor, farkli index tiplerini (Flat/IVF/HNSW) kendimiz kiyaslayabiliyoruz
+- Keyword arama: rank-bm25
+  - Neden: hafif, hizli kurulum, hibrit aramanin klasik kanadi icin yeterli
+- Birlestirme: Reciprocal Rank Fusion (RRF)
+  - Neden: basit, az parametre hassasiyeti, kanitlanmis bir yontem
+
+*(Sonraki kararlar asagiya eklenecek - her faz sonunda bir kayit.)*
+
+## Faz 1 - Embedding Cekirdegi Sonuclari
+
+300 gorsellik test setinde CLIP (ViT-B/32) ile metin->gorsel arama
+mekanizmasi dogrulandi. "food on a table" sorgusunda 5/5 sonuc dogru,
+"a dog" sorgusunda 4/5 sonuc dogru (1 sonucta CLIP kurk dokusunu
+kopekle karistirdi - bu bir gozlem, Faz 4 degerlendirme setine
+"zor/kafa karistirici" ornek olarak eklenecek).
+
+Benzerlik skorlari 0.2-0.3 araliginda cikti - bu CLIP icin normal,
+mutlak skor degil siralamanin dogrulugu onemli.
+
+**TODO / Faz 2-4'te ele alinacak:** "a dog" sorgusunda kurk dokusuyla
+karisan 1 sonuc gozlemlendi (ViT-B/32'nin bilinen bir sinirlamasi).
+Faz 2'de veri seti 5.000'e cikinca ve Faz 4'te gercek degerlendirme
+seti kurulunca:
+  1. Bu tur hatalarin ne siklikta oldugunu olc (sadece 1 ornek degil,
+     istatistiksel bir oran).
+  2. Eger oran yuksekse (orn. %10+), ViT-L/14'e gecmeyi degerlendir
+     ve HIZ/DOGRULUK trade-off'unu (Faz 2'deki index karsilastirmasi
+     gibi) sayisal olarak raporla.
+  3. Eger oran dusukse (orn. %2-3), mevcut modelle devam et, bunu
+     eval_raporu.md'de bir "bilinen sinirlama" olarak belgele.
+
+## Faz 2 - Index Karsilastirma Sonuclari (5.000 gorsel, CPU)
+
+## Faz 2 - Duzeltme: Genisletilmis Benchmark (25 sorgu, 5 tekrar)
+
+Ilk benchmark sadece 10 sorgu ve tek olcumle yapilmisti - istatistiksel
+guven artirmak icin 25 sorguya cikarildi, her sorgu 5 kez tekrarlanip
+ortalamasi alindi.
+
+| Index | Ort. Sure (ms) | Flat ile Ortusme |
+|-------|---------------|-------------------|
+| Flat  | 0.816         | %100 (referans)   |
+| IVF   | 0.004         | %68.8             |
+| HNSW  | 0.052         | %94.8             |
+
+Sonuc onceki (kucuk olcekli) benchmark ile TUTARLI cikti - HNSW
+karari degismedi, hala en iyi hiz/dogruluk dengesini veriyor.
+Bu, ilk benchmark'in tesadufen "sansli" bir sonuc olmadigini,
+gercekten guvenilir oldugunu gosteriyor.
+
+| Index | Ort. Sure (ms) | Flat ile Ortusme |
+|-------|---------------|-------------------|
+| Flat  | 0.79          | %100 (referans)   |
+| IVF   | 0.24          | %65               |
+| HNSW  | 0.10          | %97               |
+
+**Karar: HNSW, production/varsayilan index olarak secildi.**
+Gerekce: Flat'e gore ~8x daha hizli, dogruluk kaybi ihmal edilebilir
+duzeyde (%97 ortusme). IVF'nin dusuk ortusme orani (%65), varsayilan
+nprobe=1 ayarindan kaynaklaniyor - nprobe artirilarak iyilestirilebilir
+ama bu ekstra bir parametre ayari gerektirir, HNSW ekstra ayar
+gerektirmeden zaten iyi sonuc verdigi icin HNSW tercih edildi.
+
+Not: 5.000 gorsel gibi kucuk-orta bir olcekte Flat bile pratikte
+"yavas" sayilmaz (0.79ms) - asil fark cok daha buyuk veri setlerinde
+(orn. 1 milyon+ gorsel) ortaya cikar. Bu projede HNSW'yi secmemizin
+nedeni "zorunluluk" degil, "doğru mühendislik pratiği" - gercek
+sistemlerde boyle secilir.
+
+## Faz 2 - Duzeltme: Batch Isleme Eklendi
+
+Ilk versiyonda embedding cikarma gorselleri TEK TEK isliyordu.
+Yol haritasindaki tavsiyeye uyularak batch_size=32 ile toplu
+isleme gecildi (encode_images_batch fonksiyonu).
+
+**Sonuc (5.000 gorsel, CPU):**
+- Toplam sure: 215.4 saniye (3.59 dakika)
+- Gorsel basina ortalama: 43.08 ms
+- Basari orani: 5000/5000 (hic bozuk/okunamaz gorsel cikmadi)
+
+Bu sayilar Faz 6'daki README'de "sistem performansi" bolumunde
+somut veri olarak kullanilacak.
+
+## Faz 3 - BLIP Caption Uretimi Tamamlandi
+
+5.000 gorselin tamami icin BLIP (Salesforce/blip-image-captioning-base)
+ile otomatik caption uretildi, data/metadata.json'a kaydedildi.
+
+**Sure raporu:**
+- 500 gorsellik test: 451.5 saniye (0.903 sn/gorsel)
+- Tahmin: 5.000 gorsel icin ~75.2 dakika
+- Gercek: 5.000 gorsel icin 72.4 dakika (tahminle tutarli, CLIP'te
+  oldugu gibi "once kucuk olcekte olc, sonra buyu" yaklasimi burada
+  da dogrulandi)
+
+BLIP, CLIP'e gore ~20 kat daha yavas (CLIP: 0.043 sn/gorsel batch ile,
+BLIP: 0.903 sn/gorsel) - bu beklenen bir durum, CLIP sadece bir vektor
+hesaplarken BLIP kelime kelime bir cumle "uretiyor" (generation),
+bu dogasi geregi daha yavas bir islem.
+
+## Faz 3 - BM25 Dogrulama Notu
+
+"bananas" sorgusunda ilk 5 sonucun caption'i AYNI gorunuyordu
+("a bunch of bananas" x5) - bunun bir hata olup olmadigi kontrol
+edildi. Dosya yollarina bakildiginda 5 FARKLI gorsel dosyasi
+oldugu dogrulandi (000000003661.jpg, 000000006012.jpg, vb.) -
+BLIP'in benzer sahneler icin benzer/ozdes genel caption uretmesi
+normal bir davranis, sistem hatasi degil.
+
+Bu gozlem, hibrit aramanin (CLIP + BM25) neden anlamli oldugunu
+gosteriyor: BM25 sadece METNE (caption'a) bakiyor, ayni caption'li
+farkli gorselleri AYIRT EDEMIYOR. CLIP ise dogrudan GORSELE baktigi
+icin bu gorselleri birbirinden ayirt edebilir - iki yontemin
+BIRLESTIRILMESI (RRF ile) bu zayifligi telafi ediyor.
+
+## Faz 3 - RRF Dogrulama Testi
+
+reciprocal_rank_fusion() fonksiyonu, elle hazirlanmis basit bir
+ornekle test edildi. Iki farkli listede (CLIP ve BM25 sonucu)
+ortak gecen elemanlarin (A ve C), sadece tek listede gecenlerden
+(B, D, E, F) daha yuksek RRF skoru aldigi dogrulandi. Mekanizma
+beklendigi gibi calisiyor.
+
+## Faz 3 - Hibrit Arama Uctan Uca Test Edildi
+
+hybrid_search.py ile CLIP (semantic) + BM25 (keyword) + RRF
+birlestirme mekanizmasi uctan uca calisiyor. Her iki yontemden
+20'ser aday toplanip RRF ile birlestiriliyor, nihai olarak en
+iyi k sonuc donduruluyor.
+
+Mimari karar: Aday havuzu (k=20), nihai sonuc sayisindan (k=10)
+BUYUK tutuldu - bu, RRF'ye daha genis bir secim alani sunarak,
+sadece tek bir yontemin ilk-10'una giren ama digerinde daha asagida
+kalan sonuclarin da degerlendirmeye girmesini sagliyor.
+
+## Faz 4 - Test Seti Olusturuldu (Karar Degisikligi)
+
+Ilk tasarimda caption'dan "ilk 2 kelime" seklinde kisa bir sorgu
+turetme yontemi planlanmisti, ama bu YANLIS kelimeyi secme riski
+tasidigi fark edildi (onemli kelime cumlenin sonunda olabilir).
+Karar: caption'in TAMAMI dogrudan sorgu olarak kullanildi - bilgi
+kaybi riski ortadan kalkti, ama "gercekci kisa kullanici sorgusu"
+simulasyonundan feragat edildi (bu, sistemin dogru calisip
+calismadigini olcme amacini etkilemiyor).
+
+50 sorguluk test seti, data/metadata.json'dan rastgele (seed=42,
+tekrarlanabilir) secilen gorsellerin BLIP caption'larindan olusturuldu.
+
+## Faz 3.75 Tamamlandı: Esik (Threshold) Mantigi
+
+akilli_ara() fonksiyonu eklendi, esik=0.25 olarak ilk tahmin kondu.
+
+Test sonuclari:
+- "a dog" -> skor 0.2902 -> yerel (dogru davranis)
+- "a dog walking on the moon" -> skor 0.2415 -> harici (dogru davranis)
+
+Esik, iki ornegi net ayirdigi icin 0.25 olarak sabitlendi. Daha fazla
+sorguyla (orn. 10-15 farkli somut/soyut/hayali sorgu) kalibrasyon
+yapilirsa esik degeri hassaslastirilabilir, ama simdilik yeterli.
+
+## Faz 3.75 - Görsel Üretim Katmanı Kararı:
+ Ücretli API (DALL-E) yerine tamamen ücretsiz/yerel bir kurulum seçildi: diffusers + sd-turbo (görsel üretim, tek adımlı, CPU-dostu) ve flan-t5-small (prompt zenginleştirme, transformers üzerinden yerel). Gerekçe: maliyet sıfır, API anahtarı bağımlılığı yok, projenin "gerçek ve gösterilebilir" felsefesiyle tutarlı.
+ 
+ flan-t5-small denendi, çıktı kalitesi yetersiz (girdiyi olduğu gibi tekrarlıyor), gerçek bir API'ye geçildi.
+
+## Faz 3.75 - Prompt Zenginleştirme Katmanı:
+ İlk denemede flan-t5-small (küçük, yerel HF modeli) kullanıldı, ama çıktı kalitesi yetersizdi (girdiyi anlamsızca tekrarlıyordu, gerçek bir zenginleştirme yapmıyordu). Bu denemeden vazgeçildi. Yerine Ollama (yerel çalışan, ücretsiz, API anahtarı gerektirmeyen LLM sunucusu) ile llama3.1:latest modeli kullanıldı — sonuç kalitesi çok daha iyi (ışıklandırma, kompozisyon, atmosfer detayları içeren gerçek prompt engineering çıktısı). Not: ilk çağrıda model belleğe yüklenirken (~4.9 GB) gecikme oluyor (soğuk başlangıç), bu yüzden timeout 30'dan 120 saniyeye çıkarıldı.
+
+## Faz 3.75 - Bilinen Sınırlama:
+sd-turbo (hızlı, az adımlı, damıtılmış model) alışılmadık kelime kombinasyonlarında (örn. "dog" + "spacesuit") "compositional binding" sorunu yaşıyor — güçlü çağrışımlı kelime (spacesuit → insan/astronot) baskın öğeyi (dog) eziyor, tamamen insan figürü üretiyor. Basit sahnelerde ("dog on moon surface with craters/stars") sonuç kabul edilebilir kalitede. Bu, modelin bilinen bir zayıflığı — hız/kalite trade-off'unun bedeli, saklanmadı.
+
+## Faz 3.75 - Prompt Zenginlestirme ve Gorsel Uretim Katmani
+
+### Prompt Zenginlestirme (LLM Katmani)
+
+Ilk denemede flan-t5-small (kucuk, yerel bir Hugging Face modeli,
+transformers uzerinden) kullanildi. Sonuc yetersizdi - model girdiyi
+ANLAMSIZCA TEKRARLIYORDU ("a dog walking on the moon is a dog
+walking on the moon" gibi), gercek bir zenginlestirme yapmiyordu.
+Bu denemeden vazgecildi.
+
+Yerine Ollama (yerel calisan, ucretsiz, API anahtari gerektirmeyen
+bir LLM sunucusu, localhost:11434) ile llama3.1:latest modeli
+kullanilmaya baslandi. Sonuc kalitesi cok daha iyi - isiklandirma,
+kompozisyon, atmosfer detaylari iceren gercek prompt engineering
+ciktisi.
+
+Karsilasilan ve cozulen sorunlar:
+- Ilk cagrida model bellege yuklenirken (~4.9 GB) gecikme oluyordu,
+  30 saniyelik timeout yetersiz kaliyordu -> 120 saniyeye cikarildi.
+- Ollama'nin urettigi zengin promptlar (150+ kelime) Stable
+  Diffusion'in metin kodlayicisi CLIP'in 77 token sinirini asiyordu,
+  promptun sonu sessizce kesiliyordu (log'da "truncated" uyarisi
+  goruldu) -> Ollama'ya verilen talimata "60 kelimenin altinda kal"
+  kisiti eklendi, sorun cozuldu.
+
+### Gorsel Uretim Katmani
+
+Ilk denemede stabilityai/sd-turbo (yerel, diffusers uzerinden,
+damitilmis/distilled bir model) kullanildi. Hizli (CPU'da 4 adimda
+~20 saniye) ama ciddi bir kalite sorunu ortaya cikti: "compositional
+binding" zayifligi - model, guclu cagrisimli kelimeleri (orn.
+"spacesuit") baskin ogeye (orn. "dog") tercih ediyor, tamamen alakasiz
+bir sonuc (bir insan/astronot figuru) uretebiliyor. Test: "a dog
+walking on the moon" + "spacesuit" iceren zenginlestirilmis prompt
+-> tamamen bir astronot gorseli cikti, kopek yoktu. "Spacesuit"
+kelimesi kaldirilinca ("dog on moon surface with craters/stars")
+sonuc kabul edilebilir kaliteye dondu - yani sorun modelin genel
+kopek algisi degil, ozellikle guclu insan cagrisimi yapan kelimelerle
+kompozisyon kurma zayifligiydi.
+
+Karar: sd-turbo, damitilmis oldugu icin bu zayifligi adim sayisini
+artirarak (num_inference_steps) tam cozemiyor - damitma, modelin
+ince kompozisyon becerisini hiz icin feda etmesi anlamina geliyor.
+Bu yuzden yerel/damitilmis modelden vazgecilip Hugging Face
+Inference API uzerinden FLUX.1-schnell modeline gecildi:
+- Tam adimli, damitilmamis, kompozisyon/prompt sadakati konusunda
+  bilinen sekilde daha guclu bir model.
+- CPU yukumuz yok (bulutta calisiyor), hizli donuyor.
+- Ucretsiz katman var, ama bir Hugging Face hesabi + API token
+  (HF_TOKEN) gerektiriyor - "API anahtari gerektirmez" hedefinden
+  kucuk bir sapma, ama para gerektirmiyor, sadece ucretsiz kayit.
+- HF_TOKEN, .env dosyasina eklendi, python-dotenv ile okunuyor -
+  projenin Unsplash API anahtarinda kullandigi yontemle tutarli.
+
+Ders: Ucretsiz/yerel/hizli secimlerin (sd-turbo) bir bedeli oldugunu
+gozlemledik - bu bedel bazen "hicbir zaman calismaz" degil, "bazi
+spesifik durumlarda sessizce yanlis sonuc verir" seklinde ortaya
+cikiyor (compositional binding). Boyle durumlarda sonucu saklamadan
+raporlamak ve daha guclu bir alternatife gecmek, "gunu kurtarmaktan"
+daha onemli - bu proje boyunca benimsedigimiz ilkeyle (Faz 4'teki
+"sonuc kotu ciksa da saklama" prensibi) tutarli bir karar.
+
+### Durum (bu kaydin yazildigi an itibariyle)
+
+- Prompt zenginlestirme: TAMAMLANDI (Ollama + llama3.1).
+- Gorsel uretim: FLUX.1-schnell'e gecis kararlastirildi, entegrasyon
+  kodu yaziliyor, henuz test edilmedi.
+- Bir sonraki adim: search/image_generation.py'yi HF Inference API'ye
+  istek atacak sekilde yeniden yazip test etmek, sonra uc katmani
+  (yerel -> harici -> uretim) akilli_ara() icinde birlestirmek.
+
+### Guncelleme: FLUX.1-schnell Testi Basarili
+
+Test sorgusu: "a dog walking on the moon"
+Sonuc: uretilen_61107.png - kopek net, tanınabilir, gercekci sekilde
+ay yuzeyinde yuruyor, dramatik isiklandirma ve golgeler dogru
+yerlerde. sd-turbo'da yasanan compositional binding sorunu burada
+gorulmedi - "spacesuit" gibi guclu cagrisimli bir kelime olmadan
+bile FLUX, sd-turbo'nun tek basina kopegi kaybettigi durumdan
+cok daha inandirici bir sonuc uretti.
+
+## Faz 3.75 - Gorsel Uretim Katmani: TAMAMLANDI.
+
+## Faz 3.75 - akilli_ara() Uc Katman Birlestirme Karari
+
+Harici (Unsplash) katmanindan uretim katmanina GECIS KOSULU olarak
+"Unsplash bos sonuc donduruyorsa" secildi (basit yontem). Unsplash'in
+kendi arama motoru guclu oldugu icin pratikte NEREDEYSE HICBIR ZAMAN
+bos donmez - yani uretim katmani, su anki tasarimda SADECE gercek
+hata durumlarinda (rate limit, baglanti sorunu) tetiklenir.
+
+Gelecek gelistirme (yapilmadi, notu dusuldu): Unsplash sonuclarini
+KALITE acisindan degerlendirmek icin, donen ilk gorseli indirip kendi
+CLIP modelimizle yeniden puanlamak, skor hala dusukse uretime gecmek
+- bu, "Unsplash bir sey buldu ama alakasiz" durumunu da yakalar.
+Su an icin kapsam disi birakildi (zaman/karmasiklik dengesi).
+
+## Faz 4 - Değerlendirme Raporu Tamamlandı
+
+50 sorguluk test setiyle Sadece CLIP / Sadece BM25 / Hibrit (RRF)
+karşılaştırması yapıldı ve sonuçlar analiz edildi. Detaylı sayısal
+sonuçlar ve "BM25 neden suni şekilde yüksek çıktı" analizi artık
+roadmap'in öngördüğü gibi ayrı bir dosyada: **bkz. `docs/eval_raporu.md`**.
+
+Özet: Hibrit (RRF) en iyi çıkmadı çünkü test sorguları BLIP
+caption'larının tamamıydı - bu BM25'e (kelime eşleştirme) haksız bir
+avantaj verdi. Gerçek kullanıcı sorgularında (kısa, eksik kelimeli)
+CLIP ve Hibrit'in öne çıkması beklenir - bu, `docs/eval_raporu.md`'de
+detaylandırıldı.
+
+## Faz 5 - FastAPI Servisi Calisiyor
+
+api/main.py ile /health, /search/text, /search/image endpoint'leri
+kuruldu. Swagger arayuzunden (/docs) manuel test edildi:
+/search/text "a dog" sorgusuyla HTTP 200 donduruyor, akilli_ara()
+fonksiyonunun tum katmanlarina (yerel/harici/uretim) dogru sekilde
+erisiyor.
+
+## Faz 5 - Streamlit Arayuzu Calisiyor
+
+ui/app.py ile FastAPI servisine baglanan bir arayuz kuruldu.
+"a dog" sorgusuyla test edildi: 4 sonuc dogru gorsellerle,
+RRF skorlariyla ve "kendi veri setimde bulundu" kaynak
+bilgisiyle basariyla goruntulendi.
+
+## Faz 5 - Duzeltme: Unsplash Sonuclari CLIP ile Yeniden Puanlaniyor
+
+"a dog walking on the moon" sorgusunda, Unsplash kelime bazli
+eslesme yaptigi icin "gokyuzunde ay varken cekilmis kopek"
+fotograflari getirdi - bu GERCEK ama YANLIS turde bir eslesme
+(kullanicinin kastettigi "ayin yuzeyinde" sahnesi degildi).
+
+Onceden "gelecek gelistirme" olarak ertelenen ozellik simdi
+eklendi: Unsplash'in ilk sonucu, kendi CLIP modelimizle YENIDEN
+PUANLANIYOR. Bu skor da esigin (0.25) altindaysa, sistem uretim
+katmanina geciyor. Bu, "Unsplash bir sey buldu ama alakasiz"
+durumunu artik yakalayabiliyor.
+
+## Faz 5 - FLUX Kredisi Tukendi, Otomatik Yedek Plan Eklendi
+
+k=4 ile 4 gorsel uretme testi sirasinda HF Inference API'nin
+aylik ucretsiz kredisi tukendi (402 Payment Required hatasi).
+Bu, ucretsiz/API-tabanli servislerin bilinen bir riskiydi (onceden
+not dusulmustu).
+
+Cozum: image_generation.py'ye OTOMATIK yedek plan eklendi. FLUX
+basarisiz olursa (402 dahil herhangi bir hata), sistem otomatik
+olarak yerel sd-turbo modeline duser - bu model ucretsiz, sinirsiz,
+internet gerektirmez. Kalite FLUX'tan dusuk (bilinen compositional
+binding zayifligi var) ama sistem ARTIK HICBIR ZAMAN tamamen
+durmuyor. Kullanilan model (FLUX veya sd-turbo) sonuca eklenip
+kullaniciya bildiriliyor.
+
+## Faz 5 - Duzeltme: Gorsel Aramada Esik/Yedek Plan Mantigi Eklendi
+
+Bir anime/cizim karakteri yuklenip "benzer bul" denendiginde
+(COCO'daki gercek fotograflarla alakasi olmayan bir gorsel),
+sistem alakasiz sonuclar donduruyordu (vazo, mankenler vb.) -
+CLIP'in yuzeysel gorsel ozelliklere (renk, siluet) tutunmasi.
+
+Kok neden: /search/image endpoint'i, metin aramasindaki gibi bir
+ESIK KONTROLU yapmiyordu, skor ne olursa olsun yerel sonuclari
+donduruyordu.
+
+Cozum: Gorsel arama da artik esik kontrolu yapiyor. Yerel skor
+dusukse, BLIP ile yuklenen gorsel METNE cevriliyor (caption
+uretiliyor), bu caption akilli_ara()'ya gonderiliyor - boylece
+gorsel sorgular da harici (Unsplash) ve uretim (AI) katmanlarindan
+faydalanabiliyor.
+
+## Faz 5 - Onemli Bulgu: Gorsel Arama Esigi Yanlis Kalibre Edilmisti
+
+Bir anime karakteri gorseli yuklenip test edildiginde, CLIP skoru
+0.5655 cikti - bu, metin aramasi icin belirledigimiz esigin (0.25)
+COK ustunde, ama gercekte gorsel TAMAMEN alakasizdi (COCO'daki bir
+vazo fotografiyla eslesti).
+
+Kok neden: Gorsel-gorsel CLIP benzerlik skorlari, metin-gorsel
+skorlarindan DOGAL OLARAK daha yuksek cikar (renk/kompozisyon gibi
+yuzeysel ozellikler paylasildigi icin). Ayni esigi (0.25) her iki
+tur sorgu icin de kullanmak YANLISTI.
+
+Cozum: /search/image endpoint'i icin AYRI ve daha yuksek bir esik
+(0.75) belirlendi. Bu, ilk kalibrasyon - daha fazla test ornegiyle
+(hem benzer hem alakasiz gorsel ciftleriyle) hassaslastirilabilir.
+
+Ders: Bir esik degerinin bir sorgu TURU icin (metin) dogru
+calismasi, BASKA bir sorgu turu (gorsel) icin de dogru calisacagi
+anlamina gelmiyor - her giris turunun kendi skor dagilimi olabilir,
+ayri ayri kalibre edilmesi gerekiyor.
+
+## Faz 5 - Ertelenen Ozellik: Gercek Reverse Image Search
+
+Test sirasinda fark edildi: sistem "bu karakterin gercek/var olan
+baska gorsellerini bul" (Google Images tarzi reverse image search)
+YAPAMIYOR - cunku kurdugumuz mimari SEMANTIK arama (CLIP ile anlam
+benzerligi) + AI URETIM (FLUX/sd-turbo ile yeni gorsel cizme)
+temelli. Ikisi de "internette var olan GERCEK bir gorseli bulma"
+islevi gormuyor.
+
+Gercek reverse image search (Google Cloud Vision Web Detection,
+Bing Visual Search, TinEye) arastirildi - hepsi kredi karti
+dogrulamasi veya ucretli kullanim gerektiriyor, projenin "kart
+bilgisi istemeyen ucretsiz servisler" tercihiyle CELISIYOR.
+
+Karar: Bu ozellik EKLENMEDI, bilinen bir sinirlama olarak
+belgelendi. Ileride istenirse Google Cloud Vision ile eklenebilir
+(gelecek gelistirme notu).
+
+## Faz 5 - Docker: Kismi Tamamlandi (Bilinen Sinirlama)
+
+Dockerfile.api, Dockerfile.ui ve docker-compose.yml dosyalari
+yazildi ve mimarisi dogrulandi (ilk basarili build'lerde her iki
+servis de ayakta kalkip birbirleriyle iletisim kurdu - /search/text
+ve /search/image endpoint'leri container icinde CALISTI).
+
+Ancak surec sirasinda Windows ortamina ozgu, birbirinden bagimsiz
+BIRDEN FAZLA altyapi sorunu yasandi: sanallastirma ayari kapaliydi,
+WSL kurulu degildi, ucuncu parti antivirus (360 Total Security)
+build suresini 4+ saate cikardi, ve en sonunda Docker'in kendi
+imaj veritabani bozuldu ("Images list" hatasi, cozulemedi).
+
+Karar: Docker Desktop'i yeniden kurup sorunu cozmeye zaman
+harcamak yerine, mevcut CALISAN durumda (yerel uvicorn + streamlit
+ile tam fonksiyonel sistem) birakildi. Dockerfile'lar ve
+docker-compose.yml REPODA KALIYOR - bunlar Docker bilgisi ve
+mimari tasarimi kanitliyor, sadece bu ortamda sorunsuz calistigi
+DOGRULANAMADI.
+
+Bu, roadmap'in kendi "onceligini bil, gereksiz yere takilma"
+felsefesiyle tutarli bir karar - CV'de "Docker ile paketlendi"
+yerine "Docker ile paketlenebilir (Dockerfile ve docker-compose.yml hazir, ancak bu ortamda dogrulanamadi)" ifadesini kullanmak daha durustur.
+
+## Faz 6 - Entegrasyon Testi Yazildi
+
+tests/test_api.py ile /health ve /search/text endpoint'lerini
+dogrulayan basit bir entegrasyon testi eklendi. Test, sonucun
+ICERIGINI degil YAPISINI kontrol ediyor (kaynak alani var mi,
+gecerli bir deger mi, sonuc listesi bos mu) - bu, "sistem coktu mu"
+sorusuna cevap veriyor, "sonuclar mukemmel mi" sorusuna degil (o
+Faz 4'un isiydi). Test calistirildi, ikisi de basarili.
+
+## Faz 6 - Demo Video Atlandi
+
+Demo videosu (roadmap'in Hafta 23 hedefi) bilinçli olarak atlandi -
+projenin teknik iceriğine/kalitesine hicbir katkisi olmayan, sadece
+sunum amacli bir materyal. Entegrasyon testi (asil teknik gereksinim)
+zaten yazilip basariyla calistirildi. Istenirse ileride mulakat
+oncesi kolayca eklenebilir.
+
+## PROJE TAMAMLANDI
+
+9 basari kriterinden 8'i tam, 1'i (Docker) kismi tamamlandi -
+nedeni yukarida detayli belgelendi. Faz 0'dan Faz 6'ya kadar
+tum fazlar tamamlandi.
+
+Bu proje boyunca ogrenilen en onemli ders: bir seyin "iyi
+gorunmesi" ile "gercekten dogru calistigini olcmek" arasindaki
+fark. Bircok noktada (BM25'in suni yuksekligi, Unsplash'in
+alakasiz ama "bulunmus" sonuclari, esik degerlerinin farkli
+sorgu turlerinde farkli kalibre edilmesi gerektigi) ilk bakista
+"calisiyor" gorunen bir sey, daha yakindan bakildiginda duzeltme
+gerektirdi. Bu duzeltmelerin HER BIRI kayit altina alindi - bu
+da projenin en degerli ciktilarindan biri: sadece calisan bir
+sistem degil, o sistemin NASIL bu hale geldiginin tam kaydi.
+
+## Faz 6 - Duzeltme: Uretilen Goersellerde Cesitlilik Sorunu
+
+Ayni prompt ile k=4 goersel uretildiginde, sonuclarin BIRBIRINE
+COK BENZER (bazen neredeyse ozdes) ciktigi gozlemlendi. Kok neden:
+her cagrida seed (rastgele sayi tohumu) belirtilmedigi icin model/
+API varsayilan/sabit bir seed kullaniyordu.
+
+Cozum: Hem FLUX (HF Inference API) hem sd-turbo (yerel) cagrilarina
+her seferinde RASTGELE bir seed eklendi - artik ayni prompt'tan
+k farkli, gercekten CESITLI goersel uretilebiliyor.
+
+## Faz 6 - Esik Kalibrasyonu Tamamlandi (0.25 -> 0.29)
+
+Ilk esik (0.25) sadece 2 ornekle belirlenmisti, yetersiz cikti.
+30 sorguluk (15 ilgili, 15 ilgisiz) bir kalibrasyon seti olusturulup
+CLIP skorlari olculdu.
+
+**Bulgu 1 - CLIP skorlari kismen cakisiyor:** Ilgili grubun en dusuk
+skoru (0.2803, "a group of people") ile ilgisiz grubun en yuksek
+skoru (0.2892, "gothic vampire portrait") arasinda net bir bosluk
+YOK - bu, CLIP'in ham benzerlik skorlarinin mutlak olarak
+karsilastirilabilir olmadigini gosteren BILINEN bir sinirlama.
+
+**Bulgu 2 - BM25 de guvenilir bir "hakem" degil:** Gri bolgedeki
+alakasiz sorgularda ("dragon ball z realistic" BM25=5.84, "a medieval
+castle under siege" BM25=8.61) beklenenden YUKSEK BM25 skorlari
+cikti - COCO caption'larinda "ball" veya "castle" gibi kelimelerin
+TESADUFEN gecmesi (orn. top/topla ilgili fotograflar) yuzunden. Bu
+yaklasimdan (BM25'i gri bolge hakemi yapmak) VAZGECILDI.
+
+**Karar:** Esik, 30 orneklik VERIYLE 0.29 olarak belirlendi. Bu deger
+%93.3 dogruluk veriyor (28/30 dogru siniflandirma). Bilinen 2 hata:
+"a group of people" (ilgili ama esigin altinda kaliyor, gereksiz
+yere harici/uretime dusuyor - bu DUSUK MALIYETLI bir hata, Unsplash
+zaten "a group of people" icin makul sonuc bulur) ve "gothic vampire
+portrait" (ilgisiz ama esigin ustunde kaliyor, yanlislikla yerel
+sonuc gosteriyor - bu DAHA MALIYETLI bir hata tipi ama tek bir
+sinir-durumu ornegi).
+
+**Felsefe:** Mukemmel bir ayrim (100% dogruluk) bu sinyalle
+teorik olarak mumkun degil - CLIP'in dogasi bu. %93.3 dogruluk,
+"tahminle 0.25" yerine "olcerek 0.29" secmenin somut kanitidir ve
+projenin genel ilkesiyle (once olc, sonra karar ver) tutarlidir.
+
+## Faz 6 - Duzeltme: Prompt Cesitliligi Eklendi
+
+Uretilen goersellerin hala birbirine cok benzedigi (sadece seed
+degil, PROMPT'un kendisi de neredeyse ozdes oldugu icin) fark edildi.
+Cozum: zenginlestir_prompt() fonksiyonuna varyasyon_no parametresi
+eklendi, her cagrida Ollama'ya farkli bir kamera acisi/kompozisyon
+yonlendirmesi (close-up, wide shot, action pose, vb.) veriliyor.
+Artik hem prompt hem seed varyasyon gosteriyor.
+
+## Faz 6 - Bilinen Sinirlama: Hassas Metin/Logo Uretimi
+
+Kullanici, "HAS TICARET" yazan, belirli geometrik kurallara sahip
+(ucgen boyutu, kirmizi cizginin konumu) bir logo tarif etti. Model
+metni DOGRU yazdi ama GEOMETRIK talimatlari (ucgenin tam boyutu,
+cizginin tam konumu) tutarli sekilde takip edemedi.
+
+Bu, FLUX dahil TUM diffusion tabanli goersel uretim modellerinin
+BILINEN bir zayifligi - bu modeller "sahne/nesne" tarifi icin
+egitilmis, hassas VEKTOREL/GEOMETRIK grafik tasarimi icin degil.
+Cozulmeyecek bir sinirlama olarak kabul edildi ve belgelendi -
+boyle bir ihtiyac icin (logo tasarimi) doğru arac zaten bir
+goersel uretim modeli degil, bir VEKTOR/GRAFIK TASARIM araci
+(Illustrator, Canva, veya ozel logo-uretim modelleri) olurdu.
+
+## Faz 6 - Kritik Bulgu: Unsplash icin AYRI Esik Gerekiyor
+
+"winged dog" sorgusunda 8 adaydan sadece 1'i esigi (0.29) gecti,
+ve o da beklenen kaliteyi vermiyordu. search/unsplash_esik_kalibrasyon.py
+ile "a dog", "a cat", "a bicycle", "a kitchen" gibi KESINLIKLE
+alakali oldugu bilinen sorgularin Unsplash sonuclari test edildi.
+
+**Bulgu:** Unsplash gorsellerinin CLIP skorlari, COCO gorsellerine
+gore SISTEMATIK OLARAK daha dusuk cikiyor. Orn. "a kitchen" icin
+Unsplash'in 5 sonucundan HICBIRI 0.29'u gecemedi (en yuksegi 0.2780).
+Bu, COCO icin kalibre edilen esigin (0.29) Unsplash gorselleri icin
+YANLIS/COK YUKSEK oldugunu KANITLIYOR.
+
+**Olasi neden:** Unsplash, profesyonel/stuudyo kalitesinde
+fotograflardan olusuyor, COCO ise gundelik/amator fotograflardan -
+CLIP'in bu iki "gorsel alan" arasinda farkli bir skor dagilimi
+uretmesi olasi (ayrintili arastirilmadi, gozlemsel bir hipotez).
+
+**Cozum:** Unsplash yeniden puanlamasi icin AYRI bir sabit
+(HARICI_ESIK = 0.24) tanimlandi, 20 orneklik (4 sorgu x 5 sonuc)
+veriyle kalibre edildi (medyan ~0.273, coğu "kesin alakali" skor
+0.24 ustunde).
+
+**Ders:** Bir esik degerinin bir VERI KAYNAGI (COCO) icin dogru
+olmasi, BASKA bir veri kaynagi (Unsplash) icin de dogru olacagi
+anlamina gelmiyor - farkli kaynaklarin kendi kalibrasyonu olmali.
+Bu, daha once "goersel arama icin ayri esik gerekiyordu" bulgusuyla
+AYNI DERSIN bir baska tekrari.
+
+## Faz 6 - Google Custom Search Denemesi: Vazgecildi
+
+"Google Gorsellerinden direkt cekelim" fikriyle Google Cloud hesabi
+acildi, Custom Search API etkinlestirildi, Programmable Search
+Engine kuruldu. Ancak arastirma sonucu DOGRULANDI: Google, 20 Ocak
+2026'dan itibaren YENI olusturulan arama motorlarinda "tum web'de
+ara" ozelligini KALDIRDI (sadece 50 domain'e kadar arama yapilabiliyor),
+ve Custom Search JSON API'nin kendisi YENI musterilere KAPATILMIS
+durumda.
+
+Karar: Bu yoldan VAZGECILDI - Google'in kendi politika degisikligi
+nedeniyle yeni hesaplar icin teknik olarak mumkun degil. Zaten
+calisir durumda olan Unsplash + ayri kalibre edilmis esik
+(HARICI_ESIK = 0.24) cozumuyle devam edildi.
+
+Ders: Harici bir servise bagimli bir mimari kurarken, o servisin
+POLITIKA degisikliklerinin projeyi nasil etkileyebilecegini onceden
+tam ongoremeyebilirsin - bu durumda hizli pivot edip zaten CALISAN
+bir alternatife donmek, saplanip kalmaktan daha dogru bir muhendislik
+karari.
+
+## Faz 6 - Unsplash Arama Sorgusu Zenginlestirme Eklendi
+
+Kullanicinin gosterdigi ornek goersel (profesyonel bir "kopek +
+melek kanadi kostumu" cekimi), Unsplash'te GERCEKTEN var olan
+turden bir goersel oldugu halde "winged dog" gibi kisa bir sorguyla
+BULUNAMIYORDU. Kok neden: Unsplash'in kendi arama motoru, kisa/
+belirsiz sorgularda somut anahtar kelime eslesmesi YAKALAYAMIYOR.
+
+Cozum: arama_sorgusu_zenginlestir() fonksiyonu eklendi - Ollama,
+kullanicinin KISA sorgusunu, bir stok fotograf sitesinin
+indeksleyecegi SOMUT anahtar kelimelere ceviriyor (orn. "winged dog"
+-> "dog angel wings costume"). CLIP ile yeniden puanlama hala
+ORIJINAL kullanici sorgusuyla yapiliyor - zenginlestirme sadece
+Unsplash'e giden ARAMA sorgusunu etkiliyor, alaka kontrolunu degil.
+
+## [Groq'a Gecis Tamamlandi]
+
+**Sorun:** Ollama'nin yerel 8B modeli (llama3.1), nuansli talimatlari
+zayif takip ediyordu (orn. "winged dog" sorgusunu bir illustrasyon
+olarak yorumlamisti).
+
+**Denenen ve basarisiz olan modeller:** Once llama-3.3-70b-versatile,
+sonra llama-3.1-8b-instant denendi, ikisi de 404 model_not_found
+hatasi verdi. Arastirma sonucu ANLASILDI: Groq, 2026'da bu iki
+modeli ucretsiz/gelistirici katmanindan kaldirip Enterprise
+fiyatlandirmasina tasimis (16.08.2026'da tamamen kapanacaklar).
+
+**Ayrica bulunan ikinci bug:** `prompt_engineer.py` dosyasinda
+`GROQ_API_KEY = os.getenv("gsk_...")` satirinda, os.getenv()'e
+degisken ADI yerine yanlislikla ANAHTARIN KENDISI verilmisti.
+`os.getenv("GROQ_API_KEY")` olarak duzeltildi.
+
+**Cozum:** GROQ_MODEL = "openai/gpt-oss-20b" olarak degistirildi -
+Groq'un hala ucretsiz katmanda aktif sundugu bir "production"
+modeli. Test sorgulariyla ("winged dog", "dragon ball z realistic",
+"a dog walking on the moon") dogrulandi, Ollama'dan DAHA IYI sonuc
+verdi (orn. "winged dog" icin dogru "dog wearing wings" arama
+sorgusu uretti, dragon ball z'yi dogru Goku/Ultra Instinct olarak
+tanidi).
+
+**Karar:** Groq (openai/gpt-oss-20b) ile DEVAM EDILIYOR, Ollama'ya
+bagimlilik kaldirildi.
+
+## Faz 6 - Bagimlilik Temizligi (requirements.txt)
+
+Groq gecisi sonrasi requirements.txt, projedeki GERCEK import'larla
+karsilastirildi (findstr ile search/, api/, ui/, embeddings/, index/,
+eval/, tests/ klasorleri tarandi). Uc eksik bulundu:
+- matplotlib: search/test_hybrid_gorsel.py kullaniyor, listede yoktu.
+- huggingface_hub: image_generation.py dogrudan import ediyor; baska
+  paketlerle dolayli kuruldugu icin calisiyordu ama acikca listelenmemisti.
+- diffusers + accelerate: yerel sd-turbo yedegi icin gerekli. Bunlar
+  fonksiyon ICINDE import edildigi icin (satir basinda degil) ilk
+  taramada gorunmedi; ayri bir findstr ile bulundu. Eksik kalsaydi,
+  temiz bir kurulumda FLUX kredisi bittiginde yedek plan sessizce
+  calismayacakti.
+
+Alt sinirlar tahminle degil, `pip show` ile OLCULEN kurulu surumlerden
+alindi (groq 1.7.0, diffusers 0.40.0, accelerate 1.15.0,
+huggingface_hub 1.31.0, matplotlib 3.11.2).
+
+Ders: "Calisiyor" gorunen bir ortam, eksik bagimliliklari gizleyebilir
+(her sey zaten kurulu oldugu icin). Gercek dogrulama, SIFIRDAN kurulan
+bir ortamda yapilir - bu adim henuz yapilmadi, teslim oncesi yapilacak.
+
+## Faz 6 - Degerlendirme Genisletildi: BLIP'ten Bagimsiz Test Setleri
+
+Eski 50 sorguluk set BLIP caption'larindan turetilmisti, BM25 indeksi de
+ayni caption'lardan kurulu oldugu icin BM25'e haksiz avantaj sagliyordu.
+COCO'nun INSAN YAZIMI anotasyonlariyla (instances_val2017.json,
+captions_val2017.json) iki yeni set kuruldu. Gorsel ID eslesmesi once
+OLCULDU: 5000/5000 gorsel iki dosyayla da eslesti.
+
+Set 1 - Kategori (77 kisa sorgu, "dog", "pizza" gibi): "person" (%54
+gorselde var, olcum anlamsiz) ve 20'den az gorselli kategoriler (toaster,
+hair drier) disarida. Dogru cevap: kategoriyi iceren tum gorseller.
+Rastgele secimle beklenen Precision@5 (taban) = 0.0310.
+Set 2 - Insan caption (200 sorgu): her gorselin 5 insan caption'indan
+rastgele biri sorgu, dogru cevap kaynak gorsel. seed=42.
+
+| Yaklasim | P@5 (kategori) | Recall@5 (caption) | MRR@5 (caption) |
+|---|---|---|---|
+| CLIP | 0.8727 +/- 0.0276 | 0.6550 +/- 0.0337 | 0.5226 +/- 0.0318 |
+| BM25 | 0.8519 +/- 0.0290 | 0.2100 +/- 0.0289 | 0.1127 +/- 0.0190 |
+| Hibrit (RRF) | 0.9039 +/- 0.0205 | 0.5750 +/- 0.0350 | 0.3798 +/- 0.0289 |
+
+(+/- standart hata. k=5, bu yuzden MRR de MRR@5.)
+
+Bulgular:
+1. BM25'in "suni yukseklik" aciklamasi DOGRULANDI: BLIP'ten bagimsiz
+   sorgularda MRR 0.878 -> 0.113.
+2. Kisa kategori sorgularinda uc yontem birbirinden AYIRT EDILEMIYOR
+   (hibrit-CLIP farki yaklasik 0.9 standart hata). Hibritin ustunlugu
+   iddia EDILEMEZ.
+3. Insan caption sorgularinda hibrit CLIP'ten GERIDE (MRR farki 3+
+   standart hata). BEKLENTI (hibritin kisa/gercekci sorguda one cikmasi)
+   BU KISMIYLA YANLIS CIKTI. Hipotez (olculmedi): BM25, BLIP'in kisa/genel
+   caption'lari uzerinde calistigi icin insan cumlelerinde gurultulu
+   siralama uretiyor; esit agirlikli RRF bu gurultuyu CLIP'e karistiriyor.
+
+Karsilastirmalar bagimsiz-ornek varsayimiyla yapildi; ayni sorgular
+uzerinde eslemeli (paired) test daha hassas olur - yapilmadi.
+
+## Faz 6 - Eslemeli Bootstrap: Hibrit Kisa Sorgularda CLIP'ten GERIDE
+
+evaluate_v2.py'deki farklarin gercek olup olmadigini test etmek icin
+eslemeli bootstrap (10.000 tekrar, seed=42, sorgular yerine koyarak
+yeniden cekildi, %95 guven araligi) uygulandi. Ortalamalar
+evaluate_v2 ile birebir ayni cikti (tutarlilik kontrolu gecti).
+
+| Metrik | Karsilastirma | Ort. fark | %95 aralik | Sonuc |
+|---|---|---|---|---|
+| P@5 (kategori) | Hibrit - CLIP | +0.0312 | [-0.0052, +0.0675] | Ayirt edilemiyor |
+| P@5 (kategori) | Hibrit - BM25 | +0.0519 | [+0.0078, +0.0961] | Sinirda (asagiya bak) |
+| Recall@5 (caption) | Hibrit - CLIP | -0.0800 | [-0.1350, -0.0300] | Hibrit daha kotu |
+| Recall@5 (caption) | Hibrit - BM25 | +0.3650 | [+0.2900, +0.4400] | Hibrit daha iyi |
+| MRR@5 (caption) | Hibrit - CLIP | -0.1428 | [-0.1907, -0.0945] | Hibrit daha kotu |
+| MRR@5 (caption) | Hibrit - BM25 | +0.2671 | [+0.2160, +0.3195] | Hibrit daha iyi |
+
+Bulgular:
+1. Hibrit, insan caption sorgularinda CLIP'ten GERCEKTEN geride. Bu,
+   "gercekci sorguda hibrit one cikar" beklentisini kismen curutuyor.
+2. Hibrit, BM25'ten acik ara iyi.
+3. Kategori setinde hibrit-CLIP farki ayirt edilemiyor; hibritin
+   ustunlugu iddia EDILEMEZ.
+4. Hibrit-BM25 (kategori, P@5) alt siniri +0.008, sinirda. 6
+   karsilastirma yapildigi icin yaklasik (tam Bonferroni degil) bir
+   duzeltmeyle aralik 0'i icerir; bu sonuc "gercek" olarak raporlanmaz.
+   Caption setindeki hibrit-CLIP farklari ayni duzeltmeyle buyuk
+   olasilikla anlamli kalir (hesap dogrulanmadi, yaklasik).
+
+Olasi neden (OLCULMEDI, hipotez): BM25, BLIP'in kisa/genel caption'lari
+uzerinde calisiyor; insan cumlelerindeki kelimeler orada gecmedigi icin
+siralamasi gurultulu, esit agirlikli RRF bu gurultuyu CLIP'e karistiriyor.
+Sonraki adim bu hipotezi agirlikli RRF ile sinamak.
+
+## Faz 6 - Agirlikli RRF Denemesi: BM25'e Agirlik Vermek Hibriti Kurtarmadi
+
+Soru: BM25'e dusuk agirlik verilirse hibrit, CLIP'e yetisir mi?
+
+Tasarim (sonuclar gorulmeden sabitlendi): rerank.py'ye istege bagli
+"agirliklar" parametresi eklendi (varsayilan esit agirlik; eski
+davranis birebir korundu, rerank.py testi ayni ciktiyi verdi). CLIP
+agirligi 1.0'da sabit, BM25 agirligi {0, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0}.
+RRF k=60 ve aday havuzu (20) degistirilmedi. Agirlik SADECE dev setinde
+secildi: test setindeki 200 gorselin DISINDAN 500 gorsel, seed=7,
+gorsel basina rastgele bir insan caption'i (assert ile test ile
+ortusmedigi dogrulandi). Secim kurali: dev MRR@5 en yuksek agirlik,
+esitlikte kucuk. Secilen agirlik test setlerinde BIR KEZ olculdu.
+
+Dev sonuclari (500 sorgu):
+
+| BM25 agirligi | Recall@5 | MRR@5 |
+|---|---|---|
+| 0.0 | 0.6600 | 0.4950 |
+| 0.1 | 0.6500 | 0.4595 |
+| 0.2 | 0.6220 | 0.4184 |
+| 0.3 | 0.6020 | 0.4002 |
+| 0.5 | 0.6020 | 0.3959 |
+| 0.75 | 0.6000 | 0.3900 |
+| 1.0 | 0.5560 | 0.3679 |
+
+Secilen agirlik: 0.0 (saf CLIP). Egri neredeyse tek yonlu dusuyor.
+Komsu agirliklar arasindaki tek tek farklar standart hata icinde,
+guvenilir olan egrinin GENEL YONU ve uclar arasindaki fark. w=0'in
+izgara kenarinda cikmasi izgara darligi degil: CLIP-only zaten alt
+sinir, yani BM25'in eklenen her payi bu sorgu turunda sonucu kotulestiriyor.
+
+Test sonuclari: onceki sonuclarla birebir tutarli (kontrol satirlari
+gecti). Insan caption: secilen (=CLIP) Recall 0.6550, MRR 0.5226;
+esit agirlikli hibrit 0.5750, 0.3798. Kategori P@5: secilen 0.8727,
+esit 0.9039 (fark -0.0312, aralik [-0.0675, +0.0052], ayirt edilemiyor).
+NOT: test setinde "secilen - esit" karsilastirmasi, onceki bootstrap'in
+isaret cevrilmis AYNISIDIR (secilen = CLIP); yeni kanit sayilmaz.
+Bagimsiz dogrulama dev setidir (ayni yon, 500 farkli gorsel).
+
+Sonuc: BLIP caption'lari uzerindeki BM25 ile kurdugumuz hibrit, cumle
+tarzi sorgularda CLIP'ten kotu, kisa kategori sorgularinda ayirt
+edilemez; agirlikla kurtarilamadi. Nedeni hala OLCULMEDI.
+
+Sinirlar: agirlik sadece insan-caption sorgularinda secildi (kategori
+icin ayri dev seti yok). Sadece BM25 agirligi arandi (RRF k ve havuz
+boyutu sabit). Uretim kodu (hibrit_ara, akilli_ara) DEGISTIRILMEDI;
+hibritin varsayilan kalip kalmayacagi acik karar.
+
+Sonraki adim: BM25'in CLIP'in kacirdigini hic yakalayip yakalamadigini
+(tamamlayicilik) sorgu bazli sonuclardan olcmek.
+
+## Faz 6 - Tamamlayicilik Analizi: BM25 Yeni Aday Getirmiyor
+
+Soru: BM25, CLIP'in kacirdigini hic yakaliyor mu? Her sorgu icin hedef
+gorselin CLIP ve BM25 ilk 5 / ilk 20 icinde olup olmadigina bakildi
+(insan caption sorgulari, tek hedef; kategori seti bu analize uygun
+degil, cok sayida dogru cevap var).
+
+Yorumlama kurali sonuclar gorulmeden yazildi: "sadece BM25 buldu" sayisi
+"sadece CLIP buldu"dan cok kucukse BM25 yeni bilgi eklemiyor.
+
+| Olcum | Dev (500) | Test (200) |
+|---|---|---|
+| CLIP ilk 5'te buldu | 330 (%66.0) | 131 (%65.5) |
+| BM25 ilk 5'te buldu | 105 (%21.0) | 42 (%21.0) |
+| Sadece CLIP buldu (ilk 5) | 233 | 99 |
+| Sadece BM25 buldu (ilk 5) | 8 | 10 |
+| BM25 ilk 20'de buldu, CLIP ilk 20'de bulamadi | 12 (%2.4) | 9 (%4.5) |
+| Hibrit (esit agirlik) ilk 5'te buldu | 278 (%55.6) | 115 (%57.5) |
+
+Hibritin "sadece CLIP buldu" sorgulardan kaybi: dev 69/233, test 23/99.
+"Sadece BM25 buldu" sorgulardan kurtardigi: dev 5/8, test 4/10.
+
+Bulgular:
+1. BM25 yeni aday neredeyse hic getirmiyor (ilk 20'de en fazla %2.4,
+   dev). Kural geregi: BM25 bu sorgu turunde yeni bilgi eklemiyor.
+2. Esit agirlikli RRF bunun bedelini oduyor (dev'de net -52 sorgu).
+3. Cikarmayla tahmin: hibrit "ikisi de bulamadi" grubundan yaklasik 12
+   sorguyu ilk 5'e tasimis gorunuyor (BM25'in siralama destegi). Bu
+   dogrudan SAYILMADI, "ikisi de buldu" grubunun korundugu varsayimina
+   dayaniyor; her halde 69 kayip karsisinda kucuk.
+
+DUZELTME: analiz scriptindeki "Birlesim (ust sinir, mukemmel
+birlestirme)" etiketi yanlis. Bu sayi sadece iki ilk-5 listesi arasinda
+secim yapmanin tavani; RRF ilk 20'lik havuzlari birlestirdigi icin ilk
+5 icin gercek tavan ilk-20 birlesimidir (dev %85.2).
+
+Sinirlar: kategori sorgularinda tamamlayicilik olculmedi. BM25'in zayif
+olma NEDENI (BLIP caption'larinin kisa/jenerik olmasi) hala hipotez.
+Uretim kodu (hibrit_ara) DEGISTIRILMEDI; hibritin varsayilan kalip
+kalmayacagi acik karar.
+
+## Faz 6 - Prompt Motoru: Tire Duzeltmesi ve Bir Gozlem
+
+Groq modeli prompt'larda bazen ASCII olmayan tire (U+2011) uretiyordu;
+_groq_ile_sor icinde duz tireyle degistirildi, ciktilarda dogrulandi.
+Ek koruma: model cevabi bos (None) gelirse hata vermek yerine
+bos metin kullaniliyor, cagiran fonksiyon sablon yedegine dusuyor.
+
+Gozlem (OLCULMEDI): "a dog walking on the moon" icin Unsplash arama
+sorgusu iki calistirmada farkli cikti ("dog walking moon surface",
+"dog wearing astronaut suit moon"). Ikincisi kullanicinin soylemedigi
+bir oge (astronot kiyafeti) ekliyor. Neden: temperature=0.8 ve
+"nitelik dogal olamiyorsa kostum" talimatinin fazla genellenmesi
+(hipotez). Sonraki adim: ayni sorguyu tekrar tekrar calistirip
+degiskenligi saymak, sonra arama sorgusu icin dusuk temperature
+denemek.
+
+## Faz 6 - Arama Sorgusu Zenginlestirme: Degiskenlik Olcumu
+
+Soru: Groq, ayni sorgu icin her calistirmada farkli Unsplash arama
+sorgusu uretiyor mu, ve bu sorun mu? Tasarim (sonuclar gorulmeden):
+6 sorgu x 10 tekrar x iki temperature (0.8 mevcut, 0.2). Sadece
+degiskenlik olculdu; Unsplash'ten gelen fotograflarin KALITESI
+olculmedi.
+
+Bulgular:
+1. Temperature 0.2, degiskenligi olculebilir bicimde azaltmadi
+   (ortalama farkli cikti sayisi 4.3 vs 4.2; T=0.2'de bir cagri orijinal
+   sorguyu dondurdu, nedeni ayirt edilemedi). Temperature dusurulmedi.
+2. Asil sorun ICERIK KAYMASI: model sorguya kullanicinin soylemedigi
+   ogeler ekliyor. "a dog walking on the moon" icin T=0.8'de 8/10 cikti
+   uzay kiyafeti (space suit / spacesuit / astronaut suit) iceriyor
+   (T=0.2'de 5/9). "a kitchen" icin 10/10 cikti "modern" ekliyor.
+   "dragon ball z realistic" icin 5/10 cikti cosplay/costume ekliyor.
+3. Stabil olanlar: "winged dog" 20/20 cikti "wings" iceriyor, "a cat
+   wearing sunglasses" 20/20 ayni cikti.
+
+Hipotez (henuz kanitlanmadi): "dogal olmayan nitelik -> kostum" kurali
+(winged dog icin yazilmisti) yer/eylem durumlarina da genelleniyor.
+Sonraki adim: talimati daraltmak (kostum istisnasi sadece vucut parcasi/
+ozellik icin; ifadede olmayan oge eklenmesin) ve ayni testi tekrarlamak.
+
+On-kayitli basari olcutleri: (1) ay sorgusunda suit icerenler 8/10'dan
+<=2/10'a, (2) "winged dog" ciktilari "wing" + "wearing"/"costume" icermeye
+devam etmeli, (3) "cat wearing sunglasses" 10/10 ayni, "kitchen"de
+"modern" belirgin azalmali.
+
+Sinir: bu degisikligin NIHAI sonuclara (CLIP ile yeniden puanlanan
+Unsplash fotograflari, uretim katmanina dusme orani) etkisi OLCULMEDI.
+
+## Faz 6 - Arama Sorgusu Talimati Daraltildi: Kismi Sonuc, Yeni Sorunlar
+
+Talimat daraltildi (KURAL 1: ifadede olmayan oge ekleme; KURAL 2:
+kostum istisnasi sadece vucut parcasi/ozellik icin, yer/eylem icin
+degil). Ayni 120 cagrilik test tekrarlandi.
+
+On-kayitli olcutler (4'u de saglandi): ay sorgusunda uzay kiyafeti
+8/10 -> 0/10 (T=0.8); "winged dog" 20/20 "wings" + "wearing"/"costume"
+icerdi; "cat wearing sunglasses" 20/20 ayni; "kitchen"de "modern"
+kayboldu.
+
+Olcutlerin YAKALAMADIGI iki yeni sorun:
+1. "Basarisiz" cagri (cikti == orijinal sorgu veya Groq hatasi)
+   1/120'den 31/120'ye cikti: "dragon ball z realistic" 18/20, "a red
+   bicycle" 9/20, "a kitchen" 4/20. Basarisizlikta fonksiyon orijinal
+   sorguyu dondurur, yani ozel isimli sorgularda zenginlestirme buyuk
+   olcude devre disi kalmis olabilir (5.9'daki eski sorun). Test
+   scripti "model girdiyi aynen yazdi" ile "Groq hatasi"ni AYIRMIYOR
+   (tasarim hatasi); hatalar konsolda gorunmedigi icin API hatasi daha
+   az olasi, ama bos yanit mi aynen yansitma mi bilinmiyor.
+2. Dejenere tekrarlar: basarili 16 "a kitchen" cagrisinin 7'si "kitchen
+   kitchen kitchen"; "red bicycle red bicycle" de goruldu. Hipotez
+   (kanitlanmadi): "3-6 kelime" alt siniri ile KURAL 1 catisiyor.
+
+Karar: yeni talimat teshis bitene kadar KANITLANMAMIS sayilir. Sonraki
+adim: eval/groq_teshis.py ile ham yanit ve finish_reason'i gormek.
+Nihai sonuclara (Unsplash fotograflari, uretim katmanina dusme orani)
+etkisi hala OLCULMEDI.
+
+## Faz 6 - Arama Sorgusu Teshisi: "Basarisiz" Cagrilarin Nedeni
+
+eval/groq_teshis.py ile 15 cagrinin HAM yaniti incelendi: istisna yok,
+bos yanit yok, finish_reason hepsinde "stop". Yani sorun API degil;
+model, ozellikle KURAL 1 (oge ekleme) sonrasi, somut sorgulari AYNEN
+geri yaziyor ("dragon ball z realistic" -> "dragon ball z realistic").
+
+DUZELTME (kendi onceki yorumuma): bir onceki kayitta "ozel isimli
+sorgularda zenginlestirme devre disi, 5.9'daki eski soruna donus"
+demistim; bu fazla iddialiydi. 5.9, anahtar kelimesi eksik kisa
+sorgularla ("winged dog") ilgiliydi ve o sorgu 20/20 dogru calisiyor.
+Somut bir sorguyu ("a red bicycle", "a kitchen") degistirmemek tek
+basina kusur degil. Ayrica test scriptinin "basarisiz" metrigi
+"aynen geri yazma" ile "Groq hatasi"ni ayirt etmedigi icin sorunun
+buyuklugunu (31/120) abartiyordu. Ham sorgunun Unsplash'te zenginlestirilmis
+sorgudan daha kotu/iyi sonuc verip vermedigi OLCULMEDI.
+
+Gercek kusur: kelime tekrari ("kitchen kitchen kitchen": ilk testte
+7/16, teshiste 1/5). Hipotez (kanitlanmadi): "3-6 kelime" alt siniri
+kisa sorgularda tekrara yol aciyor.
+
+Duzeltme denemesi: talimatta "3-6 words" -> "at most 6 words" ve
+KURAL 3 (somut sorguyu degistirme, ayni kelimeyi iki kez yazma).
+Olcutler (sonuclar gorulmeden): kelime tekrarli cikti 60 cagrida <=1;
+ay sorgusunda uzay kiyafeti 0; "winged dog" 10/10 "wing" +
+("wearing"/"costume"); "cat wearing sunglasses" 10/10 ayni. "Aynen geri
+yazma" sadece raporlanir. Temperature artik 0.8'de sabit (0.2 isimize
+yaramadi).
+
+## Faz 6 - Arama Sorgusu Talimati: Metin Olcutleri Saglandi, Etkisi Hala Olculmedi
+
+Talimatta "3-6 words" -> "at most 6 words" ve KURAL 3 (somut sorguyu
+degistirme, ayni kelimeyi iki kez yazma) eklendi. 60 cagrilik test.
+
+On-kayitli olcutler: kelime tekrari 0/60 (olcut <=1, saglandi); ay
+sorgusunda uzay kiyafeti 0/10 (saglandi); "winged dog" 10/10 "wing" +
+("wearing"/"costume") (saglandi); "a cat wearing sunglasses" iki farkli
+cikti verdi (6x "a cat wearing sunglasses", 4x "cat wearing
+sunglasses"): olcut "10/10 ayni cikti" olarak yazilmisti ve YAZILDIGI
+HALIYLE SAGLANMADI; fark yalnizca "a" artikeli, icerik ayni.
+
+Gozlem: aynen geri yazma 52/60. Zenginlestirme artik somut sorgularda
+neredeyse hicbir sey yapmiyor; degisen tek sorgu "winged dog".
+"dragon ball z realistic" 10/10 aynen dondu; onceki surumde
+cosplay/costume ekleniyordu. Bu davranisin kaybi iyi mi kotu mu
+OLCULMEDI: simdiye kadar sadece cikti METNINE baktik, Unsplash'ten
+donen fotograflara degil.
+
+Sonraki adim: eval/unsplash_ham_vs_zengin.py. 6 sorgu (yerel esigin
+altinda kalip Unsplash'e dusenler), ham ve zenginlestirilmis sorgu,
+8 aday, ORIJINAL sorguyla CLIP puani, kac aday HARICI_ESIK'i geciyor.
+On-kayitli karar kurali: zengin toplamda daha cok aday geciriyorsa
+degerli; esit veya ham onde ise olculebilir kazanc yok. Sorgu sayisi
+kucuk (6), toplama bakilir.
+
+## Faz 6 - Arama Sorgusu Zenginlestirme: Unsplash'te Olculebilir Kazanc Yok
+
+6 sorgu (yerel esigin altinda kalip Unsplash'e dusenler), her biri ham
+ve zenginlestirilmis sorguyla Unsplash'e gonderildi (8 aday), adaylar
+ORIJINAL sorguyla CLIP ile puanlandi (HARICI_ESIK = 0.24).
+
+Sonuc: esigi gecen aday HAM 38/48, ZENGIN 36/48. On-kayitli kurala
+gore (esit veya ham onde -> olculebilir kazanc yok) zenginlestirmenin
+olculebilir bir faydasi gosterilemedi.
+
+Sinirlar (onemli):
+1. 6 sorgunun 4'unde zenginlestirme sorguyu DEGISTIRMEDI, yani gercek
+   karsilastirma sadece 2 sorguda: "winged dog" (6 vs 5) ve "a dog
+   walking on the moon" (5 vs 4). Farklar tek aday; Unsplash siralama
+   degiskenligi veya CLIP gurultusunden ayirt edilemez.
+2. Olcut zayif: adaylarin ~%79'u esigi geciyor (38/48), esik bu
+   sorgularda neredeyse hicbir seyi elemiyor. "CLIP esigini gecen aday
+   sayisi" fotografin gercekten istenen sahneyi (ornegin kanatli kopek)
+   gosterip gostermedigini olcmez; 5.9'daki asil sorun buydu ve bu test
+   onu sinamaz.
+3. "winged dog": en yuksek skor iki kolda ayni (0.346, buyuk olasilikla
+   ayni fotograf); medyan zenginde daha dusuk (0.255 vs 0.286). Altı
+   sorguyla bu bir iddiaya donusturulemez.
+4. Sadece SU ANKI talimat olculdu; eski talimatin (cosplay/costume
+   ekleyen surum) etkisi olculmedi.
+
+Karar: uretim kodu DEGISTIRILMEDI. Sonraki adim (sirasiyla): "winged
+dog" icin iki kolun ilk 3 fotografini gozle karsilastirmak; sonuca gore
+zenginlestirmeyi koruma/kaldirma karari. Kaldirilirsa her harici aramada
+bir Groq cagrisi (gecikme + hiz siniri riski) azalir.
+
+## Faz 6 - Arama Sorgusu Zenginlestirme: Kor Gozlemle Fayda Gosterildi (Sinirli)
+
+Onceki CLIP-esigi testi zayif bir olcutle (esigi gecen aday sayisi,
+38 vs 36) fayda gosteremedi; 5.9'daki asil soruyu sinamiyordu. Bu
+yuzden A/B kor gozlem yapildi (eval/ham_vs_zengin_gorsel.py): ham ve
+zenginlestirilmis sorgu ile Unsplash'ten 8'er fotograf, sutunlar
+rastgele A/B atandi, anahtar degerlendirme bitene kadar acilmadi.
+
+On-kayitli kural: "isabet" = fotograf istenen ozelligi GERCEKTEN
+gosteriyor (kostum/prop dahil, duz hayvan degil). Karar olcutu: her
+kolun ilk 3 fotografindaki isabet toplami; fark >= 2 ise o kol anlamli
+onde, 0-1 ise fayda gosterilemedi. "Biyikli kedi" icin kural sonradan
+(anahtar acilmadan) netlestirildi: yalnizca belirgin ve kalin biyik
+isabet sayildi; isaretler degismedi.
+
+Sonuc (ilk 3 / hepsi):
+- winged dog: ham 1/1, zengin ("dog wearing wings") 2/2
+- a cat with a mustache: ham 0/0, zengin ("cat wearing mustache") 1/3
+- a horse with horns: zenginlestirme sorguyu degistirmedi, karsilastirmaya
+  girmedi
+- Toplam ilk 3: ham 1, zengin 3 -> fark 2: on-kayitli esik saglandi
+  (esikte).
+
+Sinirlar:
+1. Fark tam esikte (2); tek bir fotografin farkli isaretlenmesi sonucu
+   "fayda gosterilemedi"ye cevirirdi.
+2. "winged dog" farki tek fotograftan geliyor (iki sutunda en az dort
+   ortak fotograf var); "a cat with a mustache" daha guclu (3 vs 0).
+3. Iki sorgu, tek degerlendirici; kor atama on yargiyi azaltir,
+   ortadan kaldirmaz.
+4. Sadece "dogal olmayan ozellik" turu test edildi. Diger sorgularda
+   zenginlestirme neredeyse hic mudahale etmiyor (52/60 aynen geri
+   yazma), etkisi orada notr.
+5. Anahtar dosyasindaki "iki_kolda_ortak_fotograf" alani URL'leri
+   karsilastirdigi icin YANLIS (ekran goruntulerinde ortak fotograflar
+   gorunuyor, ayni fotografin URL parametreleri farkli); kullanilmamali.
+
+Karar: zenginlestirme KORUNUYOR, uretim kodu DEGISTIRILMEDI. Daha guclu
+kanit istenirse 6-8 "dogal olmayan ozellik" sorgusuyla tekrarlanabilir.
+
+## Faz 6 - Temiz Kurulum Testi Tamamlandi (API ve Arayuz Dahil)
+
+requirements.txt, proje disinda (C:\temp\test_venv) sifirdan kurulan
+bir sanal ortamda dogrulandi. Ilk kurulum denemesi disk doluluguyla
+("No space left on device") yarida kesildi; yer acildiktan sonra
+ortam silinip yeniden kuruldu.
+
+Dogrulananlar (hepsi temiz ortamin Python'uyla):
+- Tum dogrudan import edilen paketler hatasiz yuklendi.
+- search/hybrid_search.py ve search/prompt_engineer.py calisti
+  (15 Ekim).
+- uvicorn ile API ayaga kalkti; tests/test_api.py 2/2 gecti
+  (/health ve /search/text).
+- streamlit ile arayuz acildi; "a dog" sorgusu 4 koepek gorseli,
+  RRF skorlari ve "Kendi veri setimde bulundu" etiketiyle sonuc verdi.
+
+Sinirlar: yerel sd-turbo yedegi (FLUX kredisi bitince devreye giren
+yol) temiz ortamda CALISTIRILMADI, yalnizca import edildigi
+dogrulandi. Gorsel yukleyerek arama (/search/image) ve harici/uretim
+katmanlari (Unsplash, Groq, FLUX) bu testte sinanmadi; sadece yerel
+metin aramasi yolu sinandi.
+
+========================================
+--- DOSYA: .\embeddings\build_captions.py ---
+========================================
+
+# ============================================================
+# Bu script, data/raw_images klasorundeki gorseller icin BLIP ile
+# otomatik caption (aciklama) uretir ve data/metadata.json dosyasina
+# kaydeder.
+#
+# ONCE KUCUK OLCEKTE TEST EDIYORUZ: MAKS_GORSEL_SAYISI ile sinirli
+# bir alt kumede calistirip SUREYI OLCECEGIZ. Bu sure bilgisiyle,
+# TUM 5.000 gorsel icin ne kadar surecegini HESAPLAYIP, ondan sonra
+# tam calistirmaya karar verecegiz - CLIP'te yaptigimiz gibi
+# "once olc, sonra buyu" mantigini burada da uyguluyoruz.
+# ============================================================
+
+import os
+import json
+import time
+
+from caption_generator import generate_caption
+
+GORSEL_KLASORU = "data/raw_images"
+METADATA_DOSYASI = "data/metadata.json"
+
+# Once kucuk bir alt kumede test ediyoruz - TUM veri setine
+# (5.000) gecmeden once suphesiz sure tahmini yapabilmek icin.
+MAKS_GORSEL_SAYISI = 5000
+
+
+def calistir():
+    tum_dosyalar = [f for f in os.listdir(GORSEL_KLASORU) if f.endswith(".jpg")]
+    secilen_dosyalar = tum_dosyalar[:MAKS_GORSEL_SAYISI]
+
+    print(f"{len(secilen_dosyalar)} gorsel icin caption uretilecek...")
+    print("(Bu bir SURE OLCUM testi - once kucuk oornekte deniyoruz)\n")
+
+    metadata_listesi = []
+    baslangic_zamani = time.time()
+
+    for i, dosya_adi in enumerate(secilen_dosyalar):
+        tam_yol = os.path.join(GORSEL_KLASORU, dosya_adi)
+        try:
+            caption = generate_caption(tam_yol)
+            metadata_listesi.append({
+                "dosya": tam_yol,
+                "caption": caption,
+            })
+        except Exception as hata:
+            print(f"HATA ({dosya_adi}): {hata}")
+
+        # Her 50 gorselde bir ilerleme durumu yazdiralim, boylece
+        # islemin canli oldugunu gorebiliriz (BLIP tek tek islendigi
+        # icin bir ilerleme cubugu tqdm ile de kurulabilirdi, ama
+        # burada basit bir sayac yeterli).
+        if (i + 1) % 50 == 0:
+            gecen_sure = time.time() - baslangic_zamani
+            gorsel_basina_ortalama = gecen_sure / (i + 1)
+            print(f"  {i+1}/{len(secilen_dosyalar)} islendi... "
+                  f"(gorsel basina ortalama: {gorsel_basina_ortalama:.2f} saniye)")
+
+    toplam_sure = time.time() - baslangic_zamani
+
+    # Sonuclari diske kaydediyoruz.
+    with open(METADATA_DOSYASI, "w", encoding="utf-8") as f:
+        json.dump(metadata_listesi, f, ensure_ascii=False, indent=2)
+
+    # ------------------------------------------------------------
+    # SURE TAHMINI: 500 gorsel icin gecen sureden yola cikarak,
+    # 5.000 gorsel (yani 10 kati) icin ne kadar surecegini
+    # HESAPLIYORUZ - henuz gercekten 5.000'i islemeden once.
+    # ------------------------------------------------------------
+    gorsel_basina_ortalama = toplam_sure / len(secilen_dosyalar)
+    tahmini_5000_suresi_dakika = (gorsel_basina_ortalama * 5000) / 60
+
+    print(f"\n--- SURE RAPORU ({len(secilen_dosyalar)} gorsel) ---")
+    print(f"Toplam sure: {toplam_sure:.1f} saniye ({toplam_sure/60:.2f} dakika)")
+    print(f"Gorsel basina ortalama: {gorsel_basina_ortalama:.3f} saniye")
+    print(f"\n>>> TAHMIN: 5.000 gorselin TAMAMI icin yaklasik "
+          f"{tahmini_5000_suresi_dakika:.1f} dakika surer <<<")
+    print(f"\nKaydedilen dosya: {METADATA_DOSYASI} ({len(metadata_listesi)} kayit)")
+
+
+if __name__ == "__main__":
+    calistir()
+
+========================================
+--- DOSYA: .\embeddings\build_full_index.py ---
+========================================
+
+# ============================================================
+# Bu script, data/raw_images klasorundeki TUM gorselleri (5.000
+# tane) CLIP'ten gecirip embedding'lerini cikarir ve diske kaydeder.
+#
+# ONCEKI VERSIYONDAN FARKI: Artik gorselleri TEK TEK degil, encode_
+# images_batch() fonksiyonuyla GRUPLAR HALINDE (batch_size=32)
+# isliyoruz - bu, ozellikle GPU'da ama CPU'da da belirgin bir hiz
+# kazanci saglar. Ayrica islemin TOPLAM SURESINI de olcup ekrana
+# yazdiriyoruz - bu sayi, Faz 6'daki README'de "5.000 gorsel icin
+# embedding cikarma X dakika surdu" seklinde somut bir veri olarak
+# kullanilacak.
+# ============================================================
+
+import os
+import json
+import time
+import numpy as np
+
+from clip_encoder import encode_images_batch
+
+GORSEL_KLASORU = "data/raw_images"
+
+EMBEDDING_DOSYASI = "data/full_embeddings.npy"
+YOL_LISTESI_DOSYASI = "data/full_image_paths.json"
+
+# Her seferde kac gorselin AYNI ANDA islenecegi. 32, CPU/GPU
+# bellek kullanimi ile hiz arasinda dengeli bir tercih - cok
+# buyutursen (orn. 256) bellek yetersiz kalabilir, cok kucultursen
+# (orn. 4) batch'in hiz avantaji azalir.
+BATCH_SIZE = 32
+
+
+def calistir():
+    # os.listdir(): klasordeki TUM dosya/klasor isimlerini bir liste
+    # olarak doner. endswith(".jpg") ile sadece .jpg uzantili
+    # dosyalari filtreliyoruz (baska dosya turu varsa almiyoruz).
+    tum_dosyalar = [f for f in os.listdir(GORSEL_KLASORU) if f.endswith(".jpg")]
+
+    # Sadece dosya isimlerini degil, TAM YOLLARI (klasor + dosya adi)
+    # olusturuyoruz - encode_images_batch() fonksiyonu tam yol bekliyor.
+    tum_yollar = [os.path.join(GORSEL_KLASORU, f) for f in tum_dosyalar]
+
+    print(f"{len(tum_yollar)} gorsel islenecek (batch_size={BATCH_SIZE})...")
+
+    # time.time(): programin o anki calisma zamanini (saniye cinsinden,
+    # bir referans noktasina gore) verir. Islem oncesi ve sonrasi bu
+    # degeri alip farkini hesaplayarak, islemin ne kadar surdugunu
+    # olcebiliyoruz.
+    baslangic_zamani = time.time()
+
+    # ISTE ANA ISLEM: tum gorselleri batch batch isleyip, hem
+    # embedding matrisini hem de basariyla islenen dosyalarin
+    # yollarini geri aliyoruz.
+    embedding_matrisi, basarili_yollar = encode_images_batch(
+        tum_yollar, batch_size=BATCH_SIZE
+    )
+
+    gecen_sure_saniye = time.time() - baslangic_zamani
+
+    # Diske kaydediyoruz - onceki versiyonla ayni mantik.
+    np.save(EMBEDDING_DOSYASI, embedding_matrisi)
+    with open(YOL_LISTESI_DOSYASI, "w") as f:
+        json.dump(basarili_yollar, f)
+
+    # ------------------------------------------------------------
+    # SURE RAPORU: Bu kisim yeni. Toplam sureyi hem saniye hem
+    # dakika cinsinden, hem de "gorsel basina ortalama sure" olarak
+    # yazdiriyoruz - Faz 6'daki README'de kullanmak icin.
+    # ------------------------------------------------------------
+    dakika = gecen_sure_saniye / 60
+    gorsel_basina_ms = (gecen_sure_saniye / len(basarili_yollar)) * 1000
+
+    print(f"\nBitti! {embedding_matrisi.shape} boyutunda bir matris kaydedildi.")
+    print(f"Kaydedilen dosyalar: {EMBEDDING_DOSYASI}, {YOL_LISTESI_DOSYASI}")
+    print(f"\n--- SURE RAPORU ---")
+    print(f"Toplam sure: {gecen_sure_saniye:.1f} saniye ({dakika:.2f} dakika)")
+    print(f"Gorsel basina ortalama: {gorsel_basina_ms:.2f} ms")
+    print(f"Islenen gorsel sayisi: {len(basarili_yollar)} / {len(tum_yollar)}")
+
+
+if __name__ == "__main__":
+    calistir()
+
+========================================
+--- DOSYA: .\embeddings\build_test_index.py ---
+========================================
+
+# ============================================================
+# Bu script, data/raw_images klasorundeki BIRDEN FAZLA gorseli
+# tek tek CLIP'ten gecirip, hepsinin vektorunu tek bir buyuk
+# tabloda (numpy array) toplar ve diske kaydeder.
+#
+# Neden diske kaydediyoruz? Cunku CLIP ile embedding cikarmak
+# yavas bir islem - her arama yaptigimizda TUM gorselleri yeniden
+# islemek yerine, bir kere isleyip sonucu saklayacagiz, arama
+# yaparken sadece bu kayitli dosyayi okuyacagiz.
+# ============================================================
+
+import os
+import json
+import numpy as np
+from tqdm import tqdm  # ilerleme cubugu gostermek icin (kac gorsel islendi gibi)
+
+# Az once yazdigimiz clip_encoder.py dosyasindaki fonksiyonu buraya cagiriyoruz.
+from clip_encoder import encode_image
+
+GORSEL_KLASORU = "data/raw_images"
+# Test asamasinda TUM veri setini degil, ilk 300 gorseli kullanacagiz.
+# Boylece islem hizli biter, mekanizmayi dogruladiktan sonra Faz 2'de
+# TUM veri setine (5.000+) genisletecegiz.
+MAKS_GORSEL_SAYISI = 300
+
+# Kayit edecegimiz dosyalarin isimleri
+EMBEDDING_DOSYASI = "data/test_embeddings.npy"
+YOL_LISTESI_DOSYASI = "data/test_image_paths.json"
+
+
+def calistir():
+    # Klasordeki tum .jpg dosyalarini bul, ilk MAKS_GORSEL_SAYISI kadarini al.
+    tum_dosyalar = [f for f in os.listdir(GORSEL_KLASORU) if f.endswith(".jpg")]
+    secilen_dosyalar = tum_dosyalar[:MAKS_GORSEL_SAYISI]
+
+    print(f"{len(secilen_dosyalar)} gorsel islenecek...")
+
+    # Her gorselin embedding'ini bu listede toplayacagiz.
+    tum_embeddingler = []
+    # Her embedding'in HANGI dosyaya ait oldugunu unutmamak icin
+    # dosya yollarini da ayni sirada bir listede tutuyoruz.
+    tum_yollar = []
+
+    # tqdm(), for dongusunu bir ilerleme cubugu ile sarmalar -
+    # terminalde "kac tanesi bitti" gorebilmemizi saglar.
+    for dosya_adi in tqdm(secilen_dosyalar):
+        tam_yol = os.path.join(GORSEL_KLASORU, dosya_adi)
+        try:
+            vektor = encode_image(tam_yol)
+            tum_embeddingler.append(vektor)
+            tum_yollar.append(tam_yol)
+        except Exception as hata:
+            # Bazi gorseller bozuk/okunamaz olabilir - programi durdurmak
+            # yerine o gorseli atlayip devam ediyoruz, hangi dosyada
+            # sorun oldugunu ekrana yazdiriyoruz.
+            print(f"HATA ({dosya_adi}): {hata}")
+
+    # Liste halindeki embeddingleri tek bir numpy array'e ceviriyoruz.
+    # Sonuc: (300, 512) boyutunda bir tablo - 300 satir (gorsel),
+    # her satirda 512 sayi (o gorselin vektoru).
+    embedding_matrisi = np.array(tum_embeddingler)
+
+    # Diske kaydediyoruz.
+    np.save(EMBEDDING_DOSYASI, embedding_matrisi)
+    with open(YOL_LISTESI_DOSYASI, "w") as f:
+        json.dump(tum_yollar, f)
+
+    print(f"Bitti! {embedding_matrisi.shape} boyutunda bir matris kaydedildi.")
+    print(f"Kaydedilen dosyalar: {EMBEDDING_DOSYASI}, {YOL_LISTESI_DOSYASI}")
+
+
+# Bu dosya dogrudan calistirildiginda calistir() fonksiyonunu cagir.
+if __name__ == "__main__":
+    calistir()
+
+========================================
+--- DOSYA: .\embeddings\caption_generator.py ---
+========================================
+
+# ============================================================
+# Bu dosya, BLIP modelini kullanarak bir gorsele bakip, o gorseli
+# ACIKLAYAN bir metin (caption) uretir. Ornek: bir kopek fotografini
+# verirsen, "a dog running in a park" gibi bir cumle doner.
+#
+# BU NEDEN ONEMLI? CLIP, gorseli dogrudan bir vektore ceviriyordu -
+# ama BM25 (Faz 3'un bir sonraki adiminda yazacagimiz) klasik
+# anahtar kelime aramasi, VEKTOR degil METIN uzerinde calisir.
+# Yani gorsellerimizin "aranabilir" bir metin karsiligina ihtiyacimiz
+# var - BLIP bize bunu sagliyor.
+#
+# CLIP ile BLIP'in farki: CLIP "bu gorsel ile bu metin ne kadar
+# benzer" diye KARSILASTIRMA yapar. BLIP ise "bu gorsel ne anlatiyor"
+# diye SIFIRDAN bir cumle URETIR (generation). Farkli bir model,
+# farkli bir gorev.
+# ============================================================
+
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
+from PIL import Image
+
+# Ayni CLIP'te oldugu gibi, GPU varsa onu kullaniyoruz, yoksa CPU.
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# BlipProcessor: gorseli, BLIP modelinin bekledigi formata (boyut,
+# normalize edilmis piksel degerleri vb.) donusturen arac - CLIP'teki
+# "preprocess" fonksiyonuna benzer bir gorevi var.
+#
+# "Salesforce/blip-image-captioning-base": Salesforce firmasinin
+# yayinladigi, gorsellere aciklama uretmek icin ozel egitilmis,
+# nispeten kucuk/hizli bir BLIP modeli (daha buyuk "large" versiyonu
+# da var ama base, ogrenme asamasi icin yeterli ve daha hizli).
+model_adi = "Salesforce/blip-image-captioning-base"
+
+processor = BlipProcessor.from_pretrained(model_adi)
+model = BlipForConditionalGeneration.from_pretrained(model_adi).to(device)
+
+# model.eval(): CLIP'te oldugu gibi, modeli "sadece kullanim" moduna
+# aliyoruz, egitim sirasinda kullanilan rastgelelik iceren islemleri
+# kapatiyoruz.
+model.eval()
+
+
+def generate_caption(image_path):
+    """
+    Bir gorsel dosyasinin yolunu alir, BLIP ile o gorseli aciklayan
+    bir cumle (caption) uretir ve metni geri dondurur.
+    """
+    # Gorseli ac, RGB'ye cevir (CLIP'teki ile ayni sebep - model hep
+    # 3 renk kanalli gorsel bekler).
+    gorsel = Image.open(image_path).convert("RGB")
+
+    # processor(gorsel, return_tensors="pt"): gorseli modele
+    # verilecek forma getirir. "pt" = PyTorch tensoru formatinda
+    # dondur demek (baska kutuphaneler icin "tf" (TensorFlow) gibi
+    # secenekler de olabilir, biz PyTorch kullandigimiz icin "pt").
+    girdi = processor(gorsel, return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        # model.generate(): BLIP'e "bu gorsel icin bir cumle URET"
+        # diyoruz. Bu, CLIP'teki encode_image()'dan FARKLI bir islem -
+        # orada tek bir vektor donuyordu, burada modelin kelime kelime
+        # URETTIGI bir cumlenin token (sayisal kod) hali donuyor.
+        #
+        # max_new_tokens=30: modelin uretecegi cumlenin en fazla kac
+        # kelime/parca (token) uzunlugunda olabilecegini sinirliyoruz -
+        # cok uzun, gereksiz detayli cumleler uretmesini engelliyoruz.
+        cikti = model.generate(**girdi, max_new_tokens=30)
+
+    # processor.decode(): modelin urettigi sayisal token'lari, tekrar
+    # OKUNABILIR bir metne (insan dili cumlesine) ceviriyoruz.
+    # skip_special_tokens=True: modelin ic mekanizmasinda kullandigi,
+    # "cumle burada basliyor/bitiyor" gibi ozel isaretleri (token'lari)
+    # cikti metninden temizler - biz sadece duz, okunabilir cumleyi
+    # istiyoruz.
+    caption = processor.decode(cikti[0], skip_special_tokens=True)
+
+    return caption
+
+
+# Bu dosya dogrudan calistirildiginda, tek bir ornek gorsel uzerinde
+# hizli bir test yapiyoruz.
+if __name__ == "__main__":
+    import os
+
+    klasor = "data/raw_images"
+    dosyalar = [f for f in os.listdir(klasor) if f.endswith(".jpg")]
+
+    if not dosyalar:
+        print("data/raw_images klasorunde hic .jpg dosyasi bulamadim!")
+    else:
+        # Ilk 3 gorseli test edelim, tek gorselle yetinmeyelim -
+        # boylece modelin genel olarak makul cumleler urettigini
+        # birden fazla ornekte gorebiliriz.
+        for dosya_adi in dosyalar[:3]:
+            tam_yol = os.path.join(klasor, dosya_adi)
+            uretilen_caption = generate_caption(tam_yol)
+            print(f"{dosya_adi} -> {uretilen_caption}")
+
+========================================
+--- DOSYA: .\embeddings\clip_encoder.py ---
+========================================
+
+import torch
+import open_clip
+from tqdm import tqdm
+import numpy as np
+from PIL import Image
+
+# ============================================================
+# ADIM 1: Hangi donanimda calisacagimizi belirliyoruz.
+# Eger bilgisayarinda/Colab'da bir GPU (cuda) varsa onu kullan,
+# yoksa normal islemciyi (cpu) kullan. GPU cok daha hizli calisir.
+# ============================================================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Kullanilan cihaz: {device}")
+
+# ============================================================
+# ADIM 2: CLIP modelini yukluyoruz.
+# "ViT-B-32" -> modelin mimarisi (Vision Transformer, Base boyut, 32 patch)
+# "laion2b_s34b_b79k" -> bu mimarinin hangi veriyle onceden egitildigi
+# (LAION adli 2 milyar goeselli bir veri setiyle egitilmis, hazir agirliklar)
+#
+# create_model_and_transforms() bize UC sey veriyor:
+#   model      -> asil sinir agi (embedding uretecek olan)
+#   _          -> egitim icin kullanilan bir transform (biz kullanmiyoruz, o yuzden _ dedik)
+#   preprocess -> gorselleri modele vermeden once nasil hazirlayacagimizi soyleyen fonksiyon
+#                 (boyutlandirma, kirpma, normalizasyon gibi islemleri otomatik yapar)
+# ============================================================
+model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32", pretrained="laion2b_s34b_b79k"
+)
+
+# tokenizer: bir metni (orn. "kirmizi araba") modelin anlayacagi sayisal
+# forma (token'lara) ceviren arac. Goersel icin preprocess neyse, metin icin tokenizer o.
+tokenizer = open_clip.get_tokenizer("ViT-B-32")
+
+# Modeli sectigimiz cihaza (GPU/CPU) tasiyoruz.
+model = model.to(device)
+
+# model.eval(): modeli "degerlendirme moduna" aliyoruz.
+# Bu, modelin egitim sirasinda kullandigi bazi rastgelelik iceren
+# islemleri (dropout gibi) kapatir - biz egitmiyoruz, sadece kullaniyoruz.
+model.eval()
+
+
+def encode_image(image_path):
+    """
+    Bir gorsel dosyasinin yolunu (path) alir, CLIP'in urettigi
+    512 boyutlu sayisal vektorunu (embedding) dondurur.
+    """
+    # Gorseli ac, RGB formatina cevir (bazi gorseller siyah-beyaz/farkli
+    # formatta olabilir, CLIP hep RGB (3 renk kanali) bekler).
+    image = Image.open(image_path).convert("RGB")
+
+    # preprocess: gorseli modelin bekledigi boyuta/formata getirir.
+    # unsqueeze(0): modele "tek bir gorsel gonderiyorum" demek icin
+    # basina bir "batch boyutu" ekler (model normalde birden fazla
+    # gorseli aynı anda islemek uzere tasarlanmis, biz tek gorsel
+    # gonderdigimiz icin bu boyutu elle ekliyoruz).
+    image_input = preprocess(image).unsqueeze(0).to(device)
+
+    # torch.no_grad(): "gradyan hesaplama" (egitim icin gerekli olan
+    # matematiksel takip) yapma diyoruz. Sadece tahmin/donusum
+    # yaptigimiz icin bu, islemi hem hizlandirir hem bellek tasarrufu saglar.
+    with torch.no_grad():
+        vektor = model.encode_image(image_input)
+
+        # L2 Normalizasyon: vektorun "uzunlugunu" 1'e esitliyoruz.
+        # Bunu yapmazsak, iki vektor arasindaki benzerligi (cosine similarity)
+        # dogru olcemeyiz - normalize edilmemis vektorlerde "buyukluk"
+        # benzerlik hesabini bozar. Bu adim CLIP ile calisirken KRITIK.
+        vektor = vektor / vektor.norm(dim=-1, keepdim=True)
+
+    # GPU'daysa CPU'ya geri al, PyTorch tensorunu normal bir
+    # numpy array'e cevir (diger kutuphanelerle -orn. FAISS- uyumlu olsun diye).
+    # [0] ile "batch" boyutunu (basta elle ekledigimiz) kaldiriyoruz.
+    return vektor.cpu().numpy()[0]
+
+
+def encode_text(text):
+    """
+    Bir metin (orn. "kirmizi bir araba") alir, CLIP'in urettigi
+    512 boyutlu sayisal vektorunu (embedding) dondurur.
+    Yukaridaki encode_image ile MANTIK OLARAK AYNI islemi yapar,
+    tek fark gorsel yerine metin isliyor olmasi.
+    """
+    # tokenizer bir liste bekler (birden fazla metni aynı anda
+    # isleyebilmek icin), o yuzden text'i [text] seklinde listeye sariyoruz.
+    text_input = tokenizer([text]).to(device)
+
+    with torch.no_grad():
+        vektor = model.encode_text(text_input)
+        vektor = vektor / vektor.norm(dim=-1, keepdim=True)  # ayni normalize islemi
+
+    return vektor.cpu().numpy()[0]
+
+def encode_images_batch(image_paths, batch_size=32):
+    """
+    Birden fazla gorseli TEK TEK degil, gruplar (batch) halinde isler.
+
+    Neden batch onemli? encode_image() fonksiyonu her cagrildiginda
+    modelin "unsqueeze(0)" ile tek gorsellik sahte bir grup olusturdugunu
+    hatirla - yani model aslinda hep gruplar halinde calismak icin
+    tasarlanmis, biz onu 1'lik gruplarla kullaniyorduk. Bu, ozellikle
+    GPU'da (ve biraz da CPU'da) verimsizdir - cunku donanim, ayni anda
+    birden fazla gorseli islerken cok daha verimli calisir (paralel
+    hesaplama). 32 gorseli TEK TEK islemek yerine, 32'sini AYNI ANDA
+    modele vermek, toplam sureyi ciddi sekilde kisaltabilir - ozellikle
+    buyuk veri setlerinde (bizim 5.000 gorselimizde bile fark yaratir).
+
+    Parametreler:
+        image_paths: islenecek TUM gorsellerin dosya yollarinin listesi
+        batch_size: her seferde kac gorselin AYNI ANDA islenecegi
+                    (32, yaygin ve dengeli bir tercih - cok buyuk
+                    olursa bellek (RAM) yetersiz kalabilir, cok kucuk
+                    olursa batch'in hiz avantaji azalir)
+
+    Donus degeri:
+        (N, 512) boyutunda bir numpy array - N = basarili islenen
+        gorsel sayisi, her satir bir gorselin 512 boyutlu vektoru.
+        Ayrica hangi dosyalarin basariyla islendigini de donuyoruz
+        (bazi gorseller bozuk olabilir, onlari atlayabiliriz).
+    """
+    tum_vektorler = []
+    basarili_yollar = []
+
+    # range(0, len(image_paths), batch_size): 0'dan basla, listenin
+    # sonuna kadar git, ama HER SEFERINDE batch_size kadar atla.
+    # Ornek: 100 gorsel, batch_size=32 ise -> 0, 32, 64, 96 seklinde
+    # 4 durak olusur (son grup sadece 4 gorsel icerir, o normal).
+    for baslangic_index in tqdm(range(0, len(image_paths), batch_size)):
+        # Su anki grubun (batch'in) icerdigi dosya yollarini aliyoruz.
+        # Python'un "slice" (dilim) ozelligini kullaniyoruz:
+        # liste[baslangic:bitis] o aralikdaki elemanlari verir.
+        grup_yollari = image_paths[baslangic_index : baslangic_index + batch_size]
+
+        # Bu gruptaki HER gorseli ac, on-isle (preprocess), ama henuz
+        # modele VERME - once hepsini bir listede topluyoruz.
+        grup_tensorleri = []
+        gecerli_yollar_bu_grupta = []
+
+        for yol in grup_yollari:
+            try:
+                gorsel = Image.open(yol).convert("RGB")
+                # preprocess(gorsel) tek bir gorseli islenmis hale getirir,
+                # ama unsqueeze(0) YAPMIYORUZ burada - cunku birazdan
+                # hepsini tek seferde "yigin" (stack) halinde birlestirecegiz.
+                islenmis = preprocess(gorsel)
+                grup_tensorleri.append(islenmis)
+                gecerli_yollar_bu_grupta.append(yol)
+            except Exception as hata:
+                print(f"HATA ({yol}): {hata}")
+
+        if not grup_tensorleri:
+            # Eger bu grupta islenebilen HICBIR gorsel yoksa
+            # (hepsi bozuksa), bir sonraki gruba gec.
+            continue
+
+        # torch.stack(): tek tek islenmis gorselleri (her biri (3, 224, 224)
+        # gibi bir boyutta) TEK BIR buyuk tensore birlestirir. Sonuc:
+        # (batch_size, 3, 224, 224) boyutunda - yani "32 tane gorsel,
+        # her biri 3 renk kanali, 224x224 piksel" seklinde tek bir paket.
+        toplu_tensor = torch.stack(grup_tensorleri).to(device)
+
+        with torch.no_grad():
+            # ISTE FARK BURADA: model.encode_image() BIR KERE cagriliyor
+            # ama icinde 32 gorsel birden var - model bunlari kendi
+            # icinde PARALEL olarak isliyor, 32 ayri cagri yapmiyoruz.
+            vektorler = model.encode_image(toplu_tensor)
+            # Normalize etme islemi yine ayni - her satiri (her gorselin
+            # vektorunu) kendi icinde 1 uzunluguna getiriyoruz.
+            vektorler = vektorler / vektorler.norm(dim=-1, keepdim=True)
+
+        # GPU'daysa CPU'ya al, numpy'a cevir, listemize ekle.
+        tum_vektorler.append(vektorler.cpu().numpy())
+        basarili_yollar.extend(gecerli_yollar_bu_grupta)
+
+    # tum_vektorler su an kucuk parcalar halinde bir liste
+    # (her biri (batch_size, 512) boyutunda). np.vstack() bunlari
+    # dikey olarak (satir satir) tek bir buyuk array'de birlestirir.
+    embedding_matrisi = np.vstack(tum_vektorler)
+
+    return embedding_matrisi, basarili_yollar
+
+
+# ============================================================
+# Bu blok, dosya DOGRUDAN calistirildiginda (python clip_encoder.py)
+# devreye girer. Baska bir dosyadan bu fonksiyonlari import edersen
+# (orn. "from embeddings.clip_encoder import encode_image") bu blok
+# CALISMAZ - sadece test/deneme amacli buraya koyduk.
+# ============================================================
+if __name__ == "__main__":
+    import os
+
+    klasor = "data/raw_images"
+    # Klasordeki tum .jpg uzantili dosyalarin isimlerini bir listeye topluyoruz.
+    dosyalar = [f for f in os.listdir(klasor) if f.endswith(".jpg")]
+
+    if not dosyalar:
+        print("data/raw_images klasorunde hic .jpg dosyasi bulamadim!")
+    else:
+        # Listedeki ilk dosyayi test icin seciyoruz.
+        ornek_gorsel = os.path.join(klasor, dosyalar[0])
+        print(f"Test gorseli: {ornek_gorsel}")
+
+        # Fonksiyonlarimizi gercekten calistirip sonuclarina bakiyoruz.
+        gorsel_vektor = encode_image(ornek_gorsel)
+        metin_vektor = encode_text("a photo")
+
+        # .shape -> vektorun boyutunu gosterir, (512,) beklenen sonuc.
+        print(f"Gorsel vektor boyutu: {gorsel_vektor.shape}")
+        print(f"Metin vektor boyutu: {metin_vektor.shape}")
+        print("Calisti!")
+
+========================================
+--- DOSYA: .\embeddings\test_search.py ---
+========================================
+
+# ============================================================
+# Bu script, az once diske kaydettigimiz embedding'leri okuyup,
+# bir metin sorgusu alip, o sorguya en "yakin" (en benzer) gorselleri
+# bulan bir arama fonksiyonu icerir.
+#
+# Henuz FAISS kullanmiyoruz - sadece numpy ile matematiksel olarak
+# "hangi gorsel vektoru, sorgu vektorune en yakin" hesabini yapiyoruz.
+# ============================================================
+
+import json
+import numpy as np
+from clip_encoder import encode_text
+
+EMBEDDING_DOSYASI = "data/test_embeddings.npy"
+YOL_LISTESI_DOSYASI = "data/test_image_paths.json"
+
+
+def sorgu_ara(sorgu_metni, k=5):
+    """
+    sorgu_metni: aranacak metin (orn. "a red car")
+    k: kac tane sonuc dondurulecek (varsayilan 5)
+    """
+    # Daha once kaydettigimiz embedding matrisini ve dosya yollarini geri yukluyoruz.
+    embedding_matrisi = np.load(EMBEDDING_DOSYASI)  # (300, 512) boyutunda
+    with open(YOL_LISTESI_DOSYASI, "r") as f:
+        image_paths = json.load(f)
+
+    # Sorgu metnini de ayni 512 boyutlu vektor uzayina ceviriyoruz.
+    sorgu_vektoru = encode_text(sorgu_metni)  # (512,) boyutunda
+
+    # ============================================================
+    # ISTE ISIN KALBI: Cosine Similarity Hesabi
+    #
+    # embedding_matrisi: (300, 512)  -> 300 gorsel, her biri 512 sayidan olusuyor
+    # sorgu_vektoru:      (512,)     -> 1 sorgu, 512 sayidan olusuyor
+    #
+    # embedding_matrisi @ sorgu_vektoru -> matris carpimi.
+    # Bu islem, HER gorsel vektoru ile sorgu vektoru arasinda "ic carpim"
+    # (dot product) hesaplar ve sonucta (300,) boyutunda bir liste doner -
+    # yani her gorsel icin TEK BIR benzerlik skoru.
+    #
+    # Neden bu bir "cosine similarity" oluyor? Cunku clip_encoder.py'de
+    # her iki vektoru de L2 normalize etmistik (uzunluklarini 1 yapmistik).
+    # Uzunlugu 1 olan iki vektorun ic carpimi = aralarindaki acinin kosinusu
+    # = cosine similarity. Normalize etmeseydik bu formul GECERSIZ olurdu.
+    #
+    # Skor -1 ile 1 arasinda olur: 1'e yakinsa "cok benzer",
+    # 0'a yakinsa "alakasiz", -1'e yakinsa "zit anlamli" (CLIP'te nadir gorulur).
+    # ============================================================
+    benzerlik_skorlari = embedding_matrisi @ sorgu_vektoru
+
+    # np.argsort(): skorlari KUCUKTEN BUYUGE siralar, ama biz index (sira
+    # numarasi) istiyoruz, deger degil. [::-1] ile ters ceviriyoruz ki
+    # BUYUKTEN KUCUGE olsun (en benzer en basta olsun).
+    # [:k] ile sadece ilk k taneyi aliyoruz.
+    en_iyi_indeksler = np.argsort(benzerlik_skorlari)[::-1][:k]
+
+    print(f"\n'{sorgu_metni}' icin en iyi {k} sonuc:\n")
+    for sira, indeks in enumerate(en_iyi_indeksler, start=1):
+        dosya_yolu = image_paths[indeks]
+        skor = benzerlik_skorlari[indeks]
+        print(f"{sira}. {dosya_yolu}  (benzerlik skoru: {skor:.3f})")
+
+
+# Bu dosya dogrudan calistirildiginda birkac ornek sorgu ile test ediyoruz.
+if __name__ == "__main__":
+    # matplotlib: Python'da grafik/gorsel gostermek icin kullanilan kutuphane.
+    # Burada sonuc olarak gelen gorselleri ekranda gostermek icin kullanacagiz.
+    import matplotlib.pyplot as plt
+    from PIL import Image
+
+    def sorgu_ara_ve_goster(sorgu_metni, k=5):
+        # Once, az once yazdigimiz sorgu_ara fonksiyonunun ic mantigini
+        # tekrar kullanmak yerine, onu biraz degistirip sonuc listesini
+        # DONDUREN bir versiyonunu burada tekrar yaziyoruz (kucuk bir tekrar,
+        # ama gorsellestirme icin pratik).
+        embedding_matrisi = np.load(EMBEDDING_DOSYASI)
+        with open(YOL_LISTESI_DOSYASI, "r") as f:
+            image_paths = json.load(f)
+
+        sorgu_vektoru = encode_text(sorgu_metni)
+        benzerlik_skorlari = embedding_matrisi @ sorgu_vektoru
+        en_iyi_indeksler = np.argsort(benzerlik_skorlari)[::-1][:k]
+
+        # plt.subplots(1, k): yan yana k tane kucuk resim kutusu (panel) olustur.
+        # figsize: pencerenin genisligini/yuksekligini ayarlar (inc cinsinden).
+        fig, eksenler = plt.subplots(1, k, figsize=(4 * k, 4))
+        fig.suptitle(f"Sorgu: '{sorgu_metni}'", fontsize=16)
+
+        for sira, indeks in enumerate(en_iyi_indeksler):
+            dosya_yolu = image_paths[indeks]
+            skor = benzerlik_skorlari[indeks]
+
+            # Gorseli ac ve o panelin icine yerlestir.
+            gorsel = Image.open(dosya_yolu)
+            eksenler[sira].imshow(gorsel)
+            eksenler[sira].set_title(f"#{sira+1}\nskor: {skor:.3f}", fontsize=10)
+            eksenler[sira].axis("off")  # eksen cizgilerini/sayilarini gizle, sadece resim gorunsun
+
+        plt.tight_layout()
+        # Ekranda bir pencere acip gorselleri gosterir. Pencereyi kapatinca
+        # kod bir sonraki sorguya gecer.
+        plt.show()
+
+    sorgu_ara_ve_goster("a dog")
+    sorgu_ara_ve_goster("food on a table")
+
+========================================
+--- DOSYA: .\index\benchmark.py ---
+========================================
+
+# ============================================================
+# Bu script, kurdugumuz 3 index tipini (Flat, IVF, HNSW) HIZ ve
+# DOGRULUK acisindan karsilastirir.
+#
+# Dogruluk nasil olculur? Flat index %100 dogru kabul edilir
+# (cunku o, TUM vektorleri tek tek karsilastirir - yanilma sansi
+# yok). IVF ve HNSW'nin bulduğu sonuclarin, Flat'in bulduğu
+# sonuclarla NE KADAR ORTUSTUGUNE bakariz. Ortusme orani ne kadar
+# yuksekse, o index o kadar "guvenilir" demektir.
+#
+# BU VERSIYONDA IKI IYILESTIRME VAR:
+#   1. Sorgu sayisi 10'dan 25'e cikarildi - daha genis bir ornek
+#      uzerinden olcum yapmak, tesadufi sapmalari azaltir.
+#   2. Her sorgu icin arama, TEK SEFER degil 5 KEZ tekrarlanip
+#      ortalamasi aliniyor - cunku bilgisayarin o anki yuku
+#      (baska programlar, isletim sistemi islemleri vb.) tek bir
+#      olcumu hafifce carpitabilir. Ortalama almak bu "gurultuyu"
+#      azaltir, daha guvenilir bir sure verir.
+# ============================================================
+
+import faiss
+import numpy as np
+import json
+import time
+import sys
+import os
+
+# clip_encoder.py, embeddings klasorunde - onu buradan import
+# edebilmek icin Python'a "embeddings klasorune de bak" diyoruz.
+# sys.path, Python'un "import ederken hangi klasorlere bakayim"
+# diye kontrol ettigi liste - buraya embeddings klasorunun tam
+# yolunu ekliyoruz.
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "embeddings"))
+from clip_encoder import encode_text
+
+EMBEDDING_DOSYASI = "data/full_embeddings.npy"
+YOL_LISTESI_DOSYASI = "data/full_image_paths.json"
+
+# Test edecegimiz sorgular - 25 tane, COCO veri setinde sikca
+# gecen kategorileri (kopek, kedi, bisiklet, araba, mobilya vb.)
+# ve biraz daha soyut/genel ifadeleri karisik olarak iceriyor.
+TEST_SORGULARI = [
+    "a dog",
+    "a cat",
+    "food on a table",
+    "a person riding a bike",
+    "a car on the street",
+    "a group of people",
+    "a bathroom",
+    "an airplane",
+    "a laptop computer",
+    "a bowl of fruit",
+    "a person playing tennis",
+    "a kitchen",
+    "a living room with a couch",
+    "a busy street",
+    "a train",
+    "a boat on water",
+    "children playing",
+    "a birthday cake",
+    "a snowy mountain",
+    "a beach",
+    "a stop sign",
+    "an umbrella",
+    "a clock",
+    "a teddy bear",
+    "a pizza",
+]
+
+K = 10  # her sorgu icin ilk kac sonuca bakacagiz
+
+# Her sorguyu kac kez tekrarlayip ortalama alacagimiz. 5 tekrar,
+# olcumdeki tesadufi sapmalari makul bir surede azaltmaya yeter -
+# cok fazla tekrar (orn. 100) hem gereksiz uzun surer hem de
+# bu olcek icin ek bir dogruluk kazandirmaz.
+TEKRAR_SAYISI = 5
+
+
+def index_yukle():
+    """
+    Faiss_index.py'de diske kaydettigimiz 3 index dosyasini
+    (flat_index.faiss, ivf_index.faiss, hnsw_index.faiss) geri okur.
+    """
+    return {
+        "flat": faiss.read_index("index/flat_index.faiss"),
+        "ivf": faiss.read_index("index/ivf_index.faiss"),
+        "hnsw": faiss.read_index("index/hnsw_index.faiss"),
+    }
+
+
+def benchmark_calistir():
+    print("Index'ler yukleniyor...")
+    indexler = index_yukle()
+
+    # Her index tipi icin, tum sorgular boyunca biriken TOPLAM
+    # sureyi ve (Flat haric) ortusme oranlarini burada toplayacagiz.
+    sonuclar = {isim: {"toplam_sure": 0.0, "ortusme_oranlari": []} for isim in indexler}
+
+    print(f"{len(TEST_SORGULARI)} sorgu, her biri {TEKRAR_SAYISI} kez tekrarlanacak...\n")
+
+    # Her sorgu icin, UCU DE index'te ayni sorguyla arama yapacagiz.
+    for sorgu in TEST_SORGULARI:
+        # Sorguyu vektore ceviriyoruz - bu islemi sorgu basina SADECE
+        # BIR KEZ yapiyoruz (metni vektore cevirmek de zaman alir,
+        # ama biz sadece ARAMA suresini olcmek istiyoruz, embedding
+        # cikarma suresini degil - o yuzden bunu tekrar dongusunun
+        # DISINDA yapiyoruz).
+        sorgu_vektoru = encode_text(sorgu).reshape(1, -1).astype("float32")
+
+        # Flat index'in bulduğu sonuclari burada saklayacagiz - digerlerini
+        # bununla (dogru kabul ettigimiz referansla) karsilastiracagiz.
+        flat_sonuc_indeksleri = None
+
+        for isim, index in indexler.items():
+            # Bu sorgu + bu index icin yapilan TUM tekrarlarin
+            # surelerini burada topluyoruz.
+            bu_kombinasyonun_sureleri = []
+
+            for tekrar in range(TEKRAR_SAYISI):
+                baslangic = time.time()
+                _, I = index.search(sorgu_vektoru, K)
+                gecen_sure = time.time() - baslangic
+                bu_kombinasyonun_sureleri.append(gecen_sure)
+
+            # 5 tekrarin ORTALAMASINI aliyoruz - tek bir olcume
+            # guvenmek yerine.
+            ortalama_sure = np.mean(bu_kombinasyonun_sureleri)
+            sonuclar[isim]["toplam_sure"] += ortalama_sure
+
+            # Dogruluk (ortusme) karsilastirmasi icin en son yapilan
+            # aramanin sonucunu kullaniyoruz (hepsi ayni sonucu
+            # verir zaten, cunku ayni sorgu ayni index'te araniyor -
+            # sadece SURE olcumu tekrarlaniyor, sonuc degismez).
+            if isim == "flat":
+                flat_sonuc_indeksleri = set(I[0])
+            else:
+                bu_sonuc = set(I[0])
+                ortusen = len(bu_sonuc & flat_sonuc_indeksleri)
+                oran = ortusen / K
+                sonuclar[isim]["ortusme_oranlari"].append(oran)
+
+    # ------------------------------------------------------------
+    # Sonuclari okunakli bir tabloya dokuyoruz.
+    #
+    # Not: Basliklari degiskenlere atadik cunku "Flat'e Gore" gibi
+    # icinde Turkce kesme isareti (') olan bir metni dogrudan f-string
+    # icinde yazarsak, Python o kesme isaretini string'in bittigi yer
+    # saniyor ve SyntaxError veriyor. Degiskene atayip f-string icinde
+    # sadece degiskeni kullanmak bu sorunu tamamen ortadan kaldirir.
+    # ------------------------------------------------------------
+    baslik_1 = "Index Tipi"
+    baslik_2 = "Ort. Sure (ms)"
+    baslik_3 = "Flat ile Ortusme"
+
+    print(f"\n{baslik_1:<10} {baslik_2:<18} {baslik_3:<20}")
+    print("-" * 50)
+
+    for isim, veri in sonuclar.items():
+        # Ortalama sureyi saniyeden milisaniyeye ceviriyoruz (*1000)
+        # cunku bu kadar kucuk sureler icin ms daha okunakli.
+        ort_sure_ms = (veri["toplam_sure"] / len(TEST_SORGULARI)) * 1000
+
+        if isim == "flat":
+            referans_yazisi = "(referans)"
+            print(f"{isim:<10} {ort_sure_ms:<18.3f} {referans_yazisi:<20}")
+        else:
+            ort_ortusme = np.mean(veri["ortusme_oranlari"]) * 100
+            print(f"{isim:<10} {ort_sure_ms:<18.3f} {ort_ortusme:<20.1f}%")
+
+
+if __name__ == "__main__":
+    benchmark_calistir()
+
+========================================
+--- DOSYA: .\index\bm25_index.py ---
+========================================
+
+# ============================================================
+# Bu dosya, BLIP'in urettigi caption'lar (metin aciklamalar) uzerinde
+# KLASIK ANAHTAR KELIME ARAMASI yapan bir BM25 index'i kurar.
+#
+# BM25 NEDIR? "Best Matching 25" - arama motorlarinin (eskiden
+# Google'in bile) kullandigi, kelime frekansina dayali klasik bir
+# siralama algoritmasi. CLIP'in yaptigi "anlam benzerligi" (semantic
+# similarity) ile TAMAMEN FARKLI bir mantik kullanir:
+#
+#   CLIP (semantic): "kirmizi araba" yazinca, o kelimeleri metin
+#   olarak icermeyen ama ANLAM olarak alakali gorselleri de bulabilir
+#   (orn. caption'da "araba" gecmese bile gorselin CLIP vektoru
+#   "araba" ile yakinsa bulunur).
+#
+#   BM25 (keyword/anahtar kelime): "kirmizi araba" yazinca, SADECE
+#   caption'inda GERCEKTEN "kirmizi" VE/VEYA "araba" KELIMELERI GECEN
+#   sonuclari bulur. Anlam onemli degil, KELIMENIN KENDISI onemli.
+#
+# NEDEN IKISINE DE IHTIYACIMIZ VAR? Cunku bazen kullanici cok spesifik
+# bir kelime arar (orn. bir marka ismi, bir ozel isim) ve CLIP bunu
+# "anlamca" yakalayamayabilir - BM25 boyle durumlarda daha guvenilir.
+# Bir sonraki adimda (hybrid_search.py) ikisini BIRLESTIRECEGIZ.
+# ============================================================
+
+import json
+from rank_bm25 import BM25Okapi
+
+METADATA_DOSYASI = "data/metadata.json"
+
+
+def bm25_index_kur():
+    """
+    metadata.json'daki tum caption'lari okuyup, bir BM25 index'i
+    kurar. Ayrica, sonuc dondururken hangi index numarasinin hangi
+    gorsele ait oldugunu bilmemiz gerektigi icin, dosya yollarinin
+    listesini de geri donduruyoruz.
+    """
+    with open(METADATA_DOSYASI, "r", encoding="utf-8") as f:
+        metadata_listesi = json.load(f)
+
+    # BM25, her belgeyi (bizim durumumuzda her caption'i) bir KELIME
+    # LISTESI olarak bekler, tek bir cumle (string) olarak degil.
+    # Ornek: "a dog running in a park" -> ["a", "dog", "running", "in", "a", "park"]
+    # .split() fonksiyonu, bir metni bosluklardan bolerek kelime
+    # listesine cevirir - basit ama etkili bir "tokenization" yontemi.
+    tokenize_edilmis_caption_listesi = [
+        kayit["caption"].lower().split() for kayit in metadata_listesi
+    ]
+    # .lower(): tum harfleri kucuk harfe ceviriyoruz - boylece "Dog"
+    # ile "dog" ayni kelime olarak sayilir, buyuk/kucuk harf farki
+    # aramayi etkilemez.
+
+    # BM25Okapi: rank_bm25 kutuphanesinin sundugu, en yaygin kullanilan
+    # BM25 versiyonu. Kendisine tokenize edilmis (kelimelere bolunmus)
+    # belgelerin (caption'larin) listesini veriyoruz, o da kendi
+    # icinde hangi kelimenin hangi belgede kac kere gectigini
+    # hesaplayip bir "index" olusturuyor.
+    bm25 = BM25Okapi(tokenize_edilmis_caption_listesi)
+
+    # Hangi index numarasinin (0, 1, 2, ...) hangi GORSEL DOSYASINA
+    # ait oldugunu bilmemiz lazim - bu listeyi de saklayip donduruyoruz.
+    # Ayni "\" / "/" sorunu burada da var - normalize ediyoruz.
+    dosya_yollari = [kayit["dosya"].replace("\\", "/") for kayit in metadata_listesi]
+    caption_listesi = [kayit["caption"] for kayit in metadata_listesi]
+
+    return bm25, dosya_yollari, caption_listesi
+
+
+def bm25_ara(bm25, dosya_yollari, caption_listesi, sorgu, k=10):
+    """
+    Verilen bir BM25 index'inde, sorgu metnine gore arama yapar.
+
+    sorgu: aranacak metin (orn. "a red car")
+    k: kac tane sonuc dondurulecek
+    """
+    # Sorguyu da AYNI SEKILDE (kucuk harfe cevirip kelimelere bolerek)
+    # hazirliyoruz - index'i olustururken kullandigimiz yontemle
+    # TUTARLI olmasi lazim, yoksa karsilastirma anlamsiz olur.
+    sorgu_kelimeleri = sorgu.lower().split()
+
+    # bm25.get_scores(): verilen sorgu kelimelerine gore, index'teki
+    # HER BIR belge (caption) icin bir BM25 skoru hesaplar. Sonuc,
+    # belge sayisi kadar uzunlukta bir sayi listesi doner - her sayi,
+    # o caption'in sorguyla ne kadar "eslesip eslesmedigini" gosterir
+    # (yuksek skor = daha alakali).
+    skorlar = bm25.get_scores(sorgu_kelimeleri)
+
+    # numpy kullanmadan, Python'un kendi araclariyla en yuksek skorlu
+    # k taneyi buluyoruz. sorted() ile (index, skor) ciftlerini
+    # skora gore BUYUKTEN KUCUGE siraliyoruz (reverse=True), sonra
+    # ilk k taneyi aliyoruz.
+    indeks_skor_ciftleri = list(enumerate(skorlar))
+    siralanmis = sorted(indeks_skor_ciftleri, key=lambda x: x[1], reverse=True)
+    en_iyi_k = siralanmis[:k]
+
+    sonuclar = []
+    for indeks, skor in en_iyi_k:
+        sonuclar.append({
+            "dosya": dosya_yollari[indeks],
+            "caption": caption_listesi[indeks],
+            "skor": skor,
+        })
+
+    return sonuclar
+
+
+# Bu dosya dogrudan calistirildiginda, birkac ornek sorguyla
+# BM25 aramasini test ediyoruz.
+if __name__ == "__main__":
+    print("BM25 index kuruluyor...")
+    bm25, dosya_yollari, caption_listesi = bm25_index_kur()
+    print("Index hazir.\n")
+
+    test_sorgulari = ["dog", "bananas", "living room television"]
+
+    for sorgu in test_sorgulari:
+        print(f"--- Sorgu: '{sorgu}' ---")
+        sonuclar = bm25_ara(bm25, dosya_yollari, caption_listesi, sorgu, k=5)
+        for sira, sonuc in enumerate(sonuclar, start=1):
+            print(f"{sira}. {sonuc['caption']}  (skor: {sonuc['skor']:.2f})")
+        print()
+
+========================================
+--- DOSYA: .\index\faiss_index.py ---
+========================================
+
+# ============================================================
+# Bu dosya, FAISS kutuphanesini kullanarak 3 FARKLI index tipi
+# kurar. Amac: hangi index tipinin bizim veri boyutumuz (5.000
+# gorsel) icin en iyi hiz/dogruluk dengesini verdigini olcmek.
+#
+# Ucu de ayni islevi gorur ("en yakin vektorleri bul") ama farkli
+# yontemlerle:
+#
+# 1. FLAT   -> "Kaba kuvvet". Sorgu vektorunu, TUM 5.000 vektorle
+#              tek tek karsilastirir. En yavas ama %100 dogru -
+#              bunu "dogru cevap" referansi olarak kullanacagiz.
+#
+# 2. IVF    -> "Inverted File Index". Once tum vektorleri gruplara
+#              (kumelere) ayirir, sorgu geldiginde sadece en yakin
+#              birkac grubun icinde arama yapar. Cok daha hizli
+#              ama YAKLASIK sonuc verir (en iyi sonucu kacirabilir).
+#
+# 3. HNSW   -> "Hierarchical Navigable Small World". Vektorler
+#              arasinda bir "graf" (agac benzeri baglanti yapisi)
+#              kurar, aramayi bu graf uzerinde gezerek yapar.
+#              Genelde IVF'den daha dogru, Flat'ten daha hizlidir -
+#              hiz/dogruluk dengesi en iyi olan tip genelde budur.
+# ============================================================
+
+import faiss
+import numpy as np
+import json
+import time
+
+EMBEDDING_DOSYASI = "data/full_embeddings.npy"
+YOL_LISTESI_DOSYASI = "data/full_image_paths.json"
+
+
+def index_kur(embedding_matrisi):
+    """
+    Ayni embedding matrisinden UC farkli index kurar ve hepsini
+    bir sozlukte (dictionary) dondurur.
+    """
+    boyut = embedding_matrisi.shape[1]  # 512 (her vektorun uzunlugu)
+    n = embedding_matrisi.shape[0]  # 5000 (kac vektor oldugu)
+
+    # ------------------------------------------------------------
+    # 1. FLAT INDEX
+    # IndexFlatIP: "IP" = Inner Product (ic carpim). Vektorler
+    # normalize edilmis oldugu icin bu, cosine similarity'ye esdeger.
+    # ------------------------------------------------------------
+    flat_index = faiss.IndexFlatIP(boyut)
+    flat_index.add(embedding_matrisi)  # tum vektorleri index'e ekle
+
+    # ------------------------------------------------------------
+    # 2. IVF INDEX
+    # nlist: veriyi kac "kumeye" bolecegimiz. Genel kural: veri
+    # sayisinin karekoku civari iyi bir baslangic. 5000'in karekoku
+    # ~70, biz yuvarlak bir sayi olan 50 kullanacagiz.
+    #
+    # IVF'nin, kullanilmadan once "egitilmesi" (train) gerekir -
+    # bu, veriye bakarak kumelerin nasil olusturulacagina karar verme
+    # islemidir.
+    # ------------------------------------------------------------
+    nlist = 50
+    quantizer = faiss.IndexFlatIP(boyut)  # IVF'nin ic mekanizmasi icin bir "olcum" index'i
+    ivf_index = faiss.IndexIVFFlat(quantizer, boyut, nlist, faiss.METRIC_INNER_PRODUCT)
+    ivf_index.train(embedding_matrisi)  # kumeleri olustur
+    ivf_index.add(embedding_matrisi)  # vektorleri ekle
+
+    # ------------------------------------------------------------
+    # 3. HNSW INDEX
+    # M: her vektorun graf icinde kac komsuya baglanacagi. Yuksek M
+    # = daha dogru ama daha fazla bellek/yavas kurulum. 32 yaygin
+    # bir varsayilan deger.
+    # ------------------------------------------------------------
+    M = 32
+    hnsw_index = faiss.IndexHNSWFlat(boyut, M, faiss.METRIC_INNER_PRODUCT)
+    hnsw_index.add(embedding_matrisi)
+
+    return {
+        "flat": flat_index,
+        "ivf": ivf_index,
+        "hnsw": hnsw_index,
+    }
+
+
+def index_kaydet(index_sozlugu):
+    """Her index'i ayri bir dosyaya diske yazar."""
+    for isim, index in index_sozlugu.items():
+        faiss.write_index(index, f"index/{isim}_index.faiss")
+    print("Tum index'ler diske kaydedildi (index/ klasorunde).")
+
+
+if __name__ == "__main__":
+    print("Embedding'ler yukleniyor...")
+    embedding_matrisi = np.load(EMBEDDING_DOSYASI)
+    print(f"Yuklendi: {embedding_matrisi.shape}")
+
+    print("\n3 farkli index kuruluyor (Flat, IVF, HNSW)...")
+    baslangic = time.time()
+    index_sozlugu = index_kur(embedding_matrisi)
+    print(f"Kurulum suresi: {time.time() - baslangic:.2f} saniye")
+
+    index_kaydet(index_sozlugu)
+
+========================================
+--- DOSYA: .\index\test_bm25_dosyalar.py ---
+========================================
+
+# ============================================================
+# Bu, sadece BM25'in "bananas" sorgusu icin GERCEKTEN farkli
+# dosyalari mi buldugunu, yoksa ayni dosyayi mi tekrar tekrar mi
+# gosterdigini kontrol etmek icin yazilmis KUCUK bir test scripti.
+# ============================================================
+
+from bm25_index import bm25_index_kur, bm25_ara
+
+# BM25 index'ini kuruyoruz (bm25_index.py'deki fonksiyonu cagirarak).
+bm25, dosya_yollari, caption_listesi = bm25_index_kur()
+
+# "bananas" sorgusu icin en iyi 5 sonucu aliyoruz.
+sonuclar = bm25_ara(bm25, dosya_yollari, caption_listesi, "bananas", k=5)
+
+# Her sonucun SADECE dosya adini yazdiriyoruz - boylece caption'lar
+# ayni olsa bile, gercekten FARKLI dosyalar mi diye gozle kontrol
+# edebiliyoruz.
+print("'bananas' sorgusu icin bulunan dosyalar:")
+for sonuc in sonuclar:
+    print(f"  - {sonuc['dosya']}")
+
+========================================
+--- DOSYA: .\search\esik_kalibrasyon.py ---
+========================================
+
+# ============================================================
+# Bu script, esik degerini (threshold) TAHMINLE degil, GERCEK
+# VERIYLE kalibre etmek icin yazildi.
+#
+# MANTIK: Elimizde iki tur sorgu var:
+#   1. "Ilgili" sorgular - COCO veri setinde GERCEKTEN karsiligi
+#      olmasi beklenen seyler (orn. "a dog", "a bicycle")
+#   2. "Ilgisiz" sorgular - COCO'da KESINLIKLE karsiligi OLMAYAN
+#      seyler (orn. "hippie style", "dragon ball z")
+#
+# Ikisi icin de en iyi CLIP skorunu olcup, bu iki grubun skor
+# DAGILIMLARININ nerede AYRISTIGINI (hangi sayida "ilgili" grubun
+# skorlari "ilgisiz" grubunkinden bariz sekilde yuksek kaliyor)
+# gozlemleyip, esigi ORAYA gore ayarlayacagiz.
+#
+# YENI (bu surumde): Onceki calistirmada "ilgili" ve "ilgisiz"
+# skorlarinin CAKISTIGI (net bir bosluk olmadigi) gorulmustu. Bu
+# yuzden, cakismanin oldugu "gri bolge"deki sorgular icin BM25
+# skorunu da olcup, BM25'in CLIP'in kararsiz kaldigi yerlerde
+# ikinci bir sinyal olarak ise yarayip yaramadigina bakiyoruz.
+# ============================================================
+
+import sys
+import os
+
+# hybrid_search.py'yi import edebilmek icin bu klasoru (search/)
+# Python'un arama yoluna ekliyoruz.
+sys.path.append(os.path.dirname(__file__))
+
+# NOT: hybrid_search.py import edildigi anda, o dosyanin en ustundeki
+# "Hibrit arama sistemi baslatiliyor..." kodu da CALISIR (index'ler
+# diskten yuklenir). Bu YAVAS ama SADECE BIR KEZ olur - asagida
+# kullanacagimiz butun fonksiyon ve degiskenler bu import sayesinde
+# hazir hale gelir.
+from hybrid_search import (
+    _en_iyi_clip_skoru,   # CLIP ile en iyi skoru donduren fonksiyon
+    _bm25,                # BM25 index nesnesinin kendisi
+    _bm25_dosya_yollari,  # BM25 index'indeki dosya yollari listesi
+    _bm25_caption_listesi,  # BM25 index'indeki caption listesi
+)
+from bm25_index import bm25_ara
+
+
+# Bunlarin COCO'da GERCEKTEN karsiligi olmasi beklenir.
+ILGILI_SORGULAR = [
+    "a dog", "a cat", "a bicycle", "a person eating",
+    "a kitchen", "a bus", "a group of people", "a bathroom",
+    "an airplane", "a laptop computer", "a bowl of fruit",
+    "a person playing tennis", "a living room", "a train",
+    "a birthday cake",
+]
+
+# Bunlarin COCO'da KESINLIKLE karsiligi OLMAMASI beklenir -
+# stil/tema/karakter isimleri, COCO sadece gundelik fotograflardan olusuyor.
+ILGISIZ_SORGULAR = [
+    "hippie style outfit", "dragon ball z realistic",
+    "a dog walking on the moon", "cyberpunk city at night",
+    "watercolor painting of a forest", "aizen from bleach anime",
+    "a medieval castle under siege", "steampunk robot",
+    "a mermaid swimming in a coral reef", "gothic vampire portrait",
+    "abstract geometric pattern", "a spaceship battle in space",
+    "a fairy tale forest with glowing mushrooms",
+    "a samurai warrior at sunset", "a superhero flying over a city",
+]
+
+# Onceki calistirmada CLIP skorlarinin CAKISTIGI (ilgili en dusuk:
+# 0.2803, ilgisiz en yuksek: 0.2892) "supheli" sorgular. Bunlar icin
+# BM25 skorunu da olceceğiz.
+GRI_BOLGE_SORGULARI = {
+    "ilgili": [
+        "a group of people",         # CLIP: 0.2803 (en dusuk ilgili)
+    ],
+    "ilgisiz": [
+        "gothic vampire portrait",       # CLIP: 0.2892 (en yuksek ilgisiz - suphelisi bu)
+        "dragon ball z realistic",       # CLIP: 0.2826
+        "hippie style outfit",           # CLIP: 0.2598
+        "a medieval castle under siege", # CLIP: 0.2622
+    ],
+}
+
+
+def _en_iyi_bm25_skoru(sorgu_metni):
+    """
+    Verilen sorgu icin BM25 arama sonuclarindaki EN YUKSEK skoru
+    dondurur. Amac: CLIP skoru "gri bolge"de (belirsiz) kaldiginda,
+    BM25'in bu sorgu icin anlamli bir keyword eslesmesi bulup
+    bulamadigina bakmak.
+
+    bm25_ara() imzasi (hybrid_search.py'deki _bm25_ile_ara()'dan
+    kopyalandi): bm25_ara(bm25, dosya_yollari, caption_listesi,
+    sorgu_metni, k) ve donus degeri {"dosya":..., "caption":...,
+    "skor":...} seklinde sozluklerden olusan, skora gore SIRALI
+    bir liste.
+    """
+    sonuclar = bm25_ara(_bm25, _bm25_dosya_yollari, _bm25_caption_listesi, sorgu_metni, k=1)
+    if not sonuclar:
+        return 0.0
+    return sonuclar[0]["skor"]
+
+
+def calistir():
+    print("--- ILGILI sorgularin skorlari (yuksek olmasi beklenir) ---")
+    ilgili_skorlar = []
+    for sorgu in ILGILI_SORGULAR:
+        skor = _en_iyi_clip_skoru(sorgu)
+        ilgili_skorlar.append(skor)
+        print(f"  '{sorgu}': {skor:.4f}")
+
+    print("\n--- ILGISIZ sorgularin skorlari (dusuk olmasi beklenir) ---")
+    ilgisiz_skorlar = []
+    for sorgu in ILGISIZ_SORGULAR:
+        skor = _en_iyi_clip_skoru(sorgu)
+        ilgisiz_skorlar.append(skor)
+        print(f"  '{sorgu}': {skor:.4f}")
+
+    print(f"\nIlgili sorgularin EN DUSUK skoru: {min(ilgili_skorlar):.4f}")
+    print(f"Ilgisiz sorgularin EN YUKSEK skoru: {max(ilgisiz_skorlar):.4f}")
+    print("\nOneri: esik degeri, bu iki sayinin ARASINDA bir yerde olmali.")
+
+    # --- GRI BOLGE: CLIP + BM25 karsilastirmasi ---
+    # Bu blok, yukaridaki olcumden SONRA calisiyor (mantik sirasi
+    # dogru: once CLIP'in nerede kararsiz kaldigini olcuyoruz, sonra
+    # o kararsiz bolgeyi BM25 ile inceliyoruz).
+    print("\n--- GRI BOLGE: CLIP + BM25 karsilastirmasi ---")
+    print("(Amac: BM25, CLIP'in kararsiz kaldigi sorgularda ayirt edici mi?)\n")
+
+    for grup, sorgu_listesi in GRI_BOLGE_SORGULARI.items():
+        print(f"[{grup.upper()}]")
+        for sorgu in sorgu_listesi:
+            clip_skoru = _en_iyi_clip_skoru(sorgu)
+            bm25_skoru = _en_iyi_bm25_skoru(sorgu)
+            print(f"  '{sorgu}': CLIP={clip_skoru:.4f}  BM25={bm25_skoru:.4f}")
+        print()
+
+
+if __name__ == "__main__":
+    calistir()
+
+========================================
+--- DOSYA: .\search\external_search.py ---
+========================================
+
+# ============================================================
+# Bu dosya, Unsplash ve Openverse API'lerini kullanarak INTERNETTEN
+# gorsel arar. Yerel veri setimizde (5.000 COCO gorseli) yeterli
+# eslesme bulunamadiginda devreye giren "YEDEK PLAN" (fallback)
+# katmanidir.
+# ============================================================
+
+import os
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
+UNSPLASH_ARAMA_URL = "https://api.unsplash.com/search/photos"
+OPENVERSE_ARAMA_URL = "https://api.openverse.org/v1/images/"
+OPENVERSE_BASLIK = {"User-Agent": "multimodal-arama-motoru-ogrenci-projesi"}
+
+
+def unsplash_ile_ara(sorgu_metni, k=5):
+    """Unsplash API'sinden gorsel adaylari getirir."""
+    if not UNSPLASH_ACCESS_KEY:
+        print("UYARI: UNSPLASH_ACCESS_KEY bulunamadi (.env dosyasini kontrol et).")
+        return []
+
+    parametreler = {
+        "query": sorgu_metni,
+        "per_page": k,
+        "client_id": UNSPLASH_ACCESS_KEY,
+    }
+
+    try:
+        cevap = requests.get(UNSPLASH_ARAMA_URL, params=parametreler, timeout=10)
+        cevap.raise_for_status()
+        veri = cevap.json()
+
+        sonuclar = []
+        for gorsel in veri.get("results", []):
+            sonuclar.append({
+                "url": gorsel["urls"]["regular"],
+                "fotografci": gorsel["user"]["name"],
+                "kaynak": "unsplash",
+            })
+        return sonuclar
+
+    except requests.exceptions.RequestException as hata:
+        print(f"Unsplash arama hatasi: {hata}")
+        return []
+
+
+def openverse_ile_ara(sorgu_metni, k=5):
+    """Openverse API'sinden (API anahtari gerektirmez) ek gorsel adaylari getirir."""
+    parametreler = {"q": sorgu_metni, "page_size": k}
+    try:
+        cevap = requests.get(
+            OPENVERSE_ARAMA_URL, params=parametreler, headers=OPENVERSE_BASLIK, timeout=15
+        )
+        if cevap.status_code != 200:
+            return []
+
+        sonuclar = []
+        for s in cevap.json().get("results", []):
+            gorsel_url = s.get("thumbnail") or s.get("url")
+            if not gorsel_url:
+                continue
+            sonuclar.append({
+                "url": gorsel_url,
+                "fotografci": s.get("creator") or "Anonim",
+                "kaynak": "openverse",
+            })
+        return sonuclar
+    except Exception as hata:
+        print(f"Openverse arama hatasi: {hata}")
+        return []
+
+
+def harici_kaynaklarda_ara(sorgu_metni, k=8):
+    """
+    Hem Unsplash hem Openverse uzerinde arama yaparak aday havuzunu
+    birlestirir. Boylece tek bir stok fotograf sitesinin sinirlarina
+    takilmayiz.
+    """
+    unsplash_adaylari = unsplash_ile_ara(sorgu_metni, k=k)
+    openverse_adaylari = openverse_ile_ara(sorgu_metni, k=max(4, k // 2))
+    return unsplash_adaylari + openverse_adaylari
+
+
+if __name__ == "__main__":
+    test_sorgusu = "dog wearing wings"
+    sonuclar = harici_kaynaklarda_ara(test_sorgusu, k=4)
+    for i, s in enumerate(sonuclar, 1):
+        print(f"{i}. [{s['kaynak']}] {s['url']} ({s['fotografci']})")
+
+========================================
+--- DOSYA: .\search\hybrid_search.py ---
+========================================
+
+import sys
+import os
+import tempfile
+import requests
+import numpy as np
+import faiss
+import json
+from concurrent.futures import ThreadPoolExecutor
+
+sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "embeddings"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "index"))
+
+from clip_encoder import encode_text, encode_image
+from bm25_index import bm25_index_kur, bm25_ara
+from rerank import reciprocal_rank_fusion
+
+HARICI_ESIK = 0.25
+EMBEDDING_DOSYASI = "data/full_embeddings.npy"
+YOL_LISTESI_DOSYASI = "data/full_image_paths.json"
+HNSW_INDEX_DOSYASI = "index/hnsw_index.faiss"
+
+print("Hibrit arama sistemi baslatiliyor (index'ler yukleniyor)...")
+
+_hnsw_index = faiss.read_index(HNSW_INDEX_DOSYASI)
+with open(YOL_LISTESI_DOSYASI, "r") as f:
+    _clip_dosya_yollari_ham = json.load(f)
+    _clip_dosya_yollari = [yol.replace("\\", "/") for yol in _clip_dosya_yollari_ham]
+
+_bm25, _bm25_dosya_yollari, _bm25_caption_listesi = bm25_index_kur()
+
+print("Hazir.\n")
+
+
+def _clip_ile_ara(sorgu_metni, k=20):
+    sorgu_vektoru = encode_text(sorgu_metni).reshape(1, -1).astype("float32")
+    _, I = _hnsw_index.search(sorgu_vektoru, k)
+    return [_clip_dosya_yollari[indeks] for indeks in I[0]]
+
+
+def _bm25_ile_ara(sorgu_metni, k=20):
+    sonuclar = bm25_ara(_bm25, _bm25_dosya_yollari, _bm25_caption_listesi, sorgu_metni, k=k)
+    return [sonuc["dosya"] for sonuc in sonuclar]
+
+
+def hibrit_ara(sorgu_metni, k=10):
+    clip_sonuclari = _clip_ile_ara(sorgu_metni, k=20)
+    bm25_sonuclari = _bm25_ile_ara(sorgu_metni, k=20)
+    birlesik_siralama = reciprocal_rank_fusion([clip_sonuclari, bm25_sonuclari])
+    return birlesik_siralama[:k]
+
+
+def _en_iyi_clip_skoru(sorgu_metni):
+    sorgu_vektoru = encode_text(sorgu_metni).reshape(1, -1).astype("float32")
+    D, _ = _hnsw_index.search(sorgu_vektoru, 1)
+    return float(D[0][0])
+
+
+def _gorsel_indir(gorsel_url):
+    cevap = requests.get(gorsel_url, timeout=6)
+    cevap.raise_for_status()
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as gecici_dosya:
+        gecici_dosya.write(cevap.content)
+        return gecici_dosya.name
+
+
+def _aday_indir_gorevi(aday):
+    try:
+        yol = _gorsel_indir(aday["url"])
+        return aday, yol
+    except Exception:
+        return aday, None
+
+
+def _unsplash_sonucunu_clip_ile_puanla(gorsel_url, sorgu_metni):
+    gecici_yol = None
+    try:
+        gecici_yol = _gorsel_indir(gorsel_url)
+        gorsel_vektoru = encode_image(gecici_yol)
+        sorgu_vektoru = encode_text(sorgu_metni)
+        return float(np.dot(gorsel_vektoru, sorgu_vektoru))
+    except Exception as hata:
+        print(f"Unsplash gorseli puanlanirken hata: {hata}")
+        return 0.0
+    finally:
+        if gecici_yol and os.path.exists(gecici_yol):
+            os.remove(gecici_yol)
+
+
+def _tek_ai_gorsel_uret_gorevi(args):
+    """Paralel AI uretimi icin tekil gorev fonksiyonu."""
+    sorgu_metni, varyasyon_no = args
+    from prompt_engineer import zenginlestir_prompt
+    from image_generation import gorsel_uret
+
+    try:
+        zengin_prompt = zenginlestir_prompt(sorgu_metni, varyasyon_no=varyasyon_no)
+        uretilen_yol, kullanilan_model = gorsel_uret(zengin_prompt)
+        return {
+            "dosya": uretilen_yol,
+            "kaynak": "ai_uretim",
+            "model": kullanilan_model,
+            "prompt": zengin_prompt,
+        }
+    except Exception as hata:
+        print(f"[akilli_ara] AI Gorsel (varyasyon {varyasyon_no}) BASARISIZ: {hata}")
+        return None
+
+
+def _ai_ile_eksikleri_uret(sorgu_metni, adet):
+    """
+    ONEMLI HIZLANDIRMA: Istenen adet kadar AI gorselini SIRAYLA degil,
+    ThreadPoolExecutor ile AYNI ANDA (paralel) uretir. Boylece 4 gorsel
+    uretimi 4 kat surmez, tek gorsel suresinde (~10-15 sn) biter.
+    """
+    print(f"[akilli_ara] {adet} adet AI gorseli PARALEL olarak uretiliyor...")
+    gorevler = [(sorgu_metni, i) for i in range(adet)]
+
+    with ThreadPoolExecutor(max_workers=min(adet, 4)) as havuz:
+        sonuclar = list(havuz.map(_tek_ai_gorsel_uret_gorevi, gorevler))
+
+    uretilenler = []
+    son_prompt = None
+    for s in sonuclar:
+        if s is not None:
+            son_prompt = s.pop("prompt", None)
+            uretilenler.append(s)
+
+    return uretilenler, son_prompt
+
+
+def akilli_ara(sorgu_metni, k=10, esik=0.29):
+    from visual_judge import gorsel_hakem_onayla
+
+    en_iyi_skor = _en_iyi_clip_skoru(sorgu_metni)
+    print(f"[akilli_ara] '{sorgu_metni}' icin en iyi yerel CLIP skoru: {en_iyi_skor:.4f} (esik: {esik})")
+
+    # --- KATMAN 1: YEREL ARAMA + VLM HAKEM ---
+    if en_iyi_skor >= esik:
+        yerel_adaylar = hibrit_ara(sorgu_metni, k=min(k + 2, 6))
+        onaylanan_yerel = []
+        print(f"[akilli_ara] Yerel adaylar VLM Hakem ile dogrulaniyor...")
+        for dosya_yolu, rrf_skoru in yerel_adaylar:
+            if gorsel_hakem_onayla(dosya_yolu, sorgu_metni):
+                onaylanan_yerel.append((dosya_yolu, rrf_skoru))
+                if len(onaylanan_yerel) >= k:
+                    break
+
+        if len(onaylanan_yerel) >= k or (len(onaylanan_yerel) > 0 and en_iyi_skor >= 0.32):
+            return {
+                "kaynak": "yerel",
+                "en_iyi_skor": en_iyi_skor,
+                "sonuclar": onaylanan_yerel[:k],
+            }
+        print("[akilli_ara] Yerel adaylar VLM Hakem'i gecemedi - HARICI aramaya geciliyor...")
+
+    # --- KATMAN 2: HARICI ARAMA + PARALEL INDIRME + CLIP + VLM HAKEM ---
+    from external_search import unsplash_ile_ara, openverse_ile_ara
+    from prompt_engineer import arama_sorgulari_uret
+
+    arama_sorgulari = arama_sorgulari_uret(sorgu_metni)
+    print(f"[akilli_ara] Harici arama varyasyonlari: {arama_sorgulari}")
+
+    harici_adaylar = []
+    gorulen_temel_urller = set()
+
+    # Maksimum 2 varyasyon + Openverse ile aday havuzunu makul boyutta (maks ~12 aday) tut
+    for alt_sorgu in arama_sorgulari[:2]:
+        for aday in unsplash_ile_ara(alt_sorgu, k=5):
+            temel_url = aday["url"].split("?")[0]
+            if temel_url not in gorulen_temel_urller:
+                gorulen_temel_urller.add(temel_url)
+                harici_adaylar.append(aday)
+
+    for aday in openverse_ile_ara(arama_sorgulari[0], k=3):
+        temel_url = aday["url"].split("?")[0]
+        if temel_url not in gorulen_temel_urller:
+            gorulen_temel_urller.add(temel_url)
+            harici_adaylar.append(aday)
+
+    onaylanan_harici = []
+    en_iyi_harici_skor = 0.0
+
+    if harici_adaylar:
+        print(f"[akilli_ara] {len(harici_adaylar)} aday paralel indiriliyor ve CLIP ile puanlaniyor...")
+        sorgu_vektoru = encode_text(sorgu_metni)
+        indirilen_adaylar = []
+
+        with ThreadPoolExecutor(max_workers=10) as havuz:
+            indirilen_ciftler = list(havuz.map(_aday_indir_gorevi, harici_adaylar))
+
+        for aday, gecici_yol in indirilen_ciftler:
+            if not gecici_yol:
+                continue
+            try:
+                gorsel_vektoru = encode_image(gecici_yol)
+                skor = float(np.dot(gorsel_vektoru, sorgu_vektoru))
+                en_iyi_harici_skor = max(en_iyi_harici_skor, skor)
+                print(f"  - [{aday['kaynak']}] {aday['url'][:48]}... CLIP skoru: {skor:.4f}")
+
+                if skor >= HARICI_ESIK:
+                    indirilen_adaylar.append((aday, skor, gecici_yol))
+                else:
+                    os.remove(gecici_yol)
+            except Exception:
+                if os.path.exists(gecici_yol):
+                    os.remove(gecici_yol)
+
+        indirilen_adaylar.sort(key=lambda x: x[1], reverse=True)
+
+        if indirilen_adaylar:
+            # Sadece en yuksek skorlu (k + 1) adayi VLM Hakem'e sor (hiz icin)
+            maks_vlm_adayi = k + 1
+            print(f"[akilli_ara] En iyi {min(len(indirilen_adaylar), maks_vlm_adayi)} aday VLM Hakem ile denetleniyor...")
+            for idx, (aday, skor, gecici_yol) in enumerate(indirilen_adaylar):
+                if idx < maks_vlm_adayi and len(onaylanan_harici) < k:
+                    if gorsel_hakem_onayla(gecici_yol, sorgu_metni):
+                        onaylanan_harici.append(aday)
+                if os.path.exists(gecici_yol):
+                    os.remove(gecici_yol)
+
+        if len(onaylanan_harici) >= k:
+            return {
+                "kaynak": "harici",
+                "en_iyi_skor": en_iyi_skor,
+                "harici_clip_skoru": en_iyi_harici_skor,
+                "sonuclar": onaylanan_harici[:k],
+            }
+
+        if 0 < len(onaylanan_harici) < k:
+            eksik_adet = k - len(onaylanan_harici)
+            print(
+                f"[akilli_ara] Web'de {len(onaylanan_harici)}/{k} dogru gorsel onaylandi. "
+                f"Eksik {eksik_adet} gorsel AI ile PARALEL tamamlanacak..."
+            )
+            uretilen_ekler, son_prompt = _ai_ile_eksikleri_uret(sorgu_metni, eksik_adet)
+            return {
+                "kaynak": "harici",
+                "kismi_uretim": True,
+                "en_iyi_skor": en_iyi_skor,
+                "harici_clip_skoru": en_iyi_harici_skor,
+                "zenginlestirilmis_prompt": son_prompt,
+                "sonuclar": onaylanan_harici + uretilen_ekler,
+            }
+
+        print("[akilli_ara] Harici adaylarin HICBIRI VLM Hakem'i gecemedi - TAM URETIME geciliyor...")
+    else:
+        print("[akilli_ara] Harici kaynaklarda hic sonuc bulunamadi - TAM URETIME geciliyor...")
+
+    # --- KATMAN 3: TAM AI URETIM (PARALEL) ---
+    uretilen_sonuclar, son_kullanilan_prompt = _ai_ile_eksikleri_uret(sorgu_metni, k)
+    return {
+        "kaynak": "uretilen",
+        "en_iyi_skor": en_iyi_skor,
+        "zenginlestirilmis_prompt": son_kullanilan_prompt,
+        "sonuclar": uretilen_sonuclar,
+    }
+
+========================================
+--- DOSYA: .\search\image_generation.py ---
+========================================
+
+import os
+import io
+import random
+import urllib.parse
+import requests
+from PIL import Image
+from huggingface_hub import InferenceClient
+from dotenv import load_dotenv
+
+load_dotenv()
+HF_TOKEN = os.getenv("HF_TOKEN")
+
+FLUX_MODELI = "black-forest-labs/FLUX.1-schnell"
+
+_hf_client = None
+_hf_kredi_bitti = False
+
+
+def _hf_client_olustur():
+    global _hf_client
+    if _hf_client is None:
+        if not HF_TOKEN:
+            raise RuntimeError("HF_TOKEN bulunamadi.")
+        _hf_client = InferenceClient(token=HF_TOKEN, timeout=15)
+    return _hf_client
+
+
+def _flux_hf_ile_uret(prompt):
+    global _hf_kredi_bitti
+    if _hf_kredi_bitti:
+        raise RuntimeError("HF kredisi tukenmis durumda.")
+
+    client = _hf_client_olustur()
+    rastgele_seed = random.randint(0, 2**32 - 1)
+    print(f"[image_generation] HF FLUX.1-schnell deneniyor (seed={rastgele_seed})...")
+    try:
+        return client.text_to_image(prompt, model=FLUX_MODELI, seed=rastgele_seed)
+    except Exception as hata:
+        # Herhangi bir kredi/odeme veya API hatasinda bu oturumda HF'yi bir daha deneme
+        _hf_kredi_bitti = True
+        raise hata
+
+
+def _pollinations_ile_uret(prompt, model_adi="flux", timeout_sn=18):
+    """
+    Pollinations bulut API'si ile hizli gorsel uretir.
+    enhance=false sayesinde prompt bozulmaz, kisa timeout sayesinde sistem asili kalmaz.
+    """
+    temiz_prompt = " ".join(prompt.replace("/", " ").replace("\n", " ").split())
+    kodlanmis_prompt = urllib.parse.quote(temiz_prompt, safe="")
+    rastgele_seed = random.randint(1, 99999999)
+    url = (
+        f"https://image.pollinations.ai/prompt/{kodlanmis_prompt}"
+        f"?width=768&height=768&seed={rastgele_seed}&model={model_adi}&nologo=true&enhance=false"
+    )
+    basliklar = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    print(f"[image_generation] Bulut ({model_adi}) ile uretiliyor (seed={rastgele_seed})...")
+    cevap = requests.get(url, headers=basliklar, timeout=timeout_sn)
+    cevap.raise_for_status()
+    return Image.open(io.BytesIO(cevap.content)).convert("RGB")
+
+
+def gorsel_uret(prompt, cikti_klasoru="data/uretilen_gorseller", dosya_adi=None):
+    os.makedirs(cikti_klasoru, exist_ok=True)
+
+    kullanilan_model = "FLUX.1-schnell (HF)"
+    try:
+        gorsel = _flux_hf_ile_uret(prompt)
+    except Exception:
+        try:
+            kullanilan_model = "FLUX.1 (Bulut)"
+            gorsel = _pollinations_ile_uret(prompt, model_adi="flux", timeout_sn=18)
+        except Exception as flux_hata:
+            print(f"[image_generation] Bulut FLUX gecikti ({flux_hata}) -> Hizli Bulut Turbo'ya geciliyor...")
+            kullanilan_model = "SDXL-Turbo (Bulut)"
+            gorsel = _pollinations_ile_uret(prompt, model_adi="turbo", timeout_sn=12)
+
+    if dosya_adi is None:
+        dosya_adi = f"uretilen_{abs(hash(prompt)) % 100000}_{random.randint(1000, 9999)}.png"
+
+    yol = os.path.join(cikti_klasoru, dosya_adi)
+    gorsel.save(yol)
+    print(f"[image_generation] Kaydedildi ({kullanilan_model}): {yol}")
+
+    return yol, kullanilan_model
+
+========================================
+--- DOSYA: .\search\prompt_engineer.py ---
+========================================
+
+# ============================================================
+# Bu dosya, Faz 3.75'in "prompt engineering" katmanidir.
+# Hem stok fotograf aramasi icin coklu anahtar kelime varyasyonlari
+# uretir, hem de AI gorsel uretim modeli icin ana ozneyi kaybetmeyen
+# net promptlar olusturur.
+# ============================================================
+
+import os
+from groq import Groq
+from dotenv import load_dotenv
+
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = "openai/gpt-oss-20b"
+
+SABLON_ONEK = "A clear, photorealistic close-up or medium shot of "
+SABLON_SONEK = ", sharp focus on the main subject, natural lighting, high quality, 4k"
+
+_groq_client = None
+
+
+def _client_olustur():
+    global _groq_client
+    if _groq_client is None:
+        if not GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY bulunamadi (.env dosyasini kontrol et).")
+        _groq_client = Groq(api_key=GROQ_API_KEY)
+    return _groq_client
+
+
+def _groq_ile_sor(talimat, temperature=0.6):
+    try:
+        client = _client_olustur()
+        cevap = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": talimat}],
+            temperature=temperature,
+        )
+        sonuc = (cevap.choices[0].message.content or "").strip().strip('"').strip()
+        sonuc = sonuc.replace("\u2011", "-")
+        return sonuc
+    except Exception as hata:
+        print(f"Groq cagrisi basarisiz oldu ({hata}).")
+        return None
+
+
+def zenginlestir_prompt(kullanici_sorgusu, varyasyon_no=0):
+    """
+    Kullanicinin sorgusunu AI gorsel uretim modeli (FLUX) icin zenginlestirir.
+    ONEMLI: 'Wide establishing shot' gibi ana ozneyi manzarada kaybettiren
+    ve 'kanatli kopek' yerine 'kartal' cizilmesine yol acan acilar kaldirildi.
+    """
+    varyasyon_ipuclari = [
+        "Framing: clear medium shot at eye level, studio lighting.",
+        "Framing: close-up portrait shot in a natural outdoor setting, soft sunlight.",
+        "Framing: full-body shot standing clearly in the center of the frame, cinematic lighting.",
+        "Framing: three-quarter angle shot, warm golden hour lighting, shallow depth of field.",
+    ]
+    ipucu = varyasyon_ipuclari[varyasyon_no % len(varyasyon_ipuclari)]
+
+    talimat = (
+        "Rewrite the following user query into a clear, photorealistic image generation prompt.\n\n"
+        "CRITICAL RULES:\n"
+        "1. The FIRST sentence MUST explicitly state the main subject and all requested objects/colors "
+        f"from '{kullanici_sorgusu}'. Never replace or omit the main subject.\n"
+        "2. If the query combines an animal with an unusual attribute (e.g. 'a winged dog', 'a cat with a mustache'), "
+        "describe the actual animal clearly first (e.g. 'A real photorealistic dog with a clear canine face and four legs, "
+        "wearing realistic angel/feathered wings on its back'). NEVER turn the animal into a bird or eagle.\n"
+        "3. Keep the subject large and clearly visible in the center. Do NOT write poetic metaphors or distant landscapes.\n"
+        f"4. {ipucu}\n"
+        "5. Keep the ENTIRE response under 45 words. Reply with ONLY the prompt, no quotes, no slashes."
+        f"\n\nUser query: {kullanici_sorgusu}"
+    )
+
+    sonuc = _groq_ile_sor(talimat, temperature=0.5)
+    if sonuc and len(sonuc) > 15:
+        return sonuc
+
+    return f"{SABLON_ONEK}{kullanici_sorgusu}{SABLON_SONEK}"
+
+
+def arama_sorgusu_zenginlestir(kullanici_sorgusu, temperature=0.4):
+    """Geriye donuk uyumluluk icin tekil arama sorgusu dondurur."""
+    sorgular = arama_sorgulari_uret(kullanici_sorgusu)
+    return sorgular[0] if sorgular else kullanici_sorgusu
+
+
+def arama_sorgulari_uret(kullanici_sorgusu):
+    """
+    Tek bir arama terimiyle sinirli kalmamak icin 3 farkli stok fotograf
+    arama sorgusu uretir (orn. 'dog wearing wings', 'dog angel wings costume',
+    'dog bat wings'). Boylece Unsplash'te daha fazla gercek fotograf yakalanir.
+    """
+    talimat = (
+        "Generate 3 short, distinct stock-photo search queries (each 2 to 5 words) "
+        "to find real photographs matching the user phrase.\n\n"
+        "RULES:\n"
+        "1. If the phrase gives an animal a feature it cannot naturally have (e.g. wings on a dog, horns on a horse, "
+        "mustache on a cat), generate variations for a REAL photoshoot with costumes/props:\n"
+        "   Example for 'a winged dog':\n"
+        "   dog wearing wings\n"
+        "   dog angel wings costume\n"
+        "   dog halloween wings\n"
+        "2. If the phrase is already a literal scene (e.g. 'a blue car in front of a yellow house'), "
+        "provide 3 concise keyword variations keeping the key nouns and colors.\n"
+        "3. Reply with ONLY the 3 queries, one per line, no numbering, no bullets, no quotes.\n\n"
+        f"Phrase: {kullanici_sorgusu}"
+    )
+
+    sonuc = _groq_ile_sor(talimat, temperature=0.4)
+    if sonuc:
+        satirlar = [
+            s.strip().strip("-*1234567890. \"'")
+            for s in sonuc.splitlines()
+            if len(s.strip()) > 2
+        ]
+        # Tekrarlari kaldirirken sirayi koru
+        benzersiz = []
+        for s in satirlar:
+            if s.lower() not in [b.lower() for b in benzersiz]:
+                benzersiz.append(s)
+        if benzersiz:
+            return benzersiz[:3]
+
+    return [kullanici_sorgusu]
+
+========================================
+--- DOSYA: .\search\rerank.py ---
+========================================
+
+# ============================================================
+# Bu dosya, Reciprocal Rank Fusion (RRF) algoritmasini icerir.
+#
+# PROBLEM: Elimizde IKI farkli arama sonucu var:
+#   1. CLIP (semantic) aramasinin sonuc siralamasi
+#   2. BM25 (keyword) aramasinin sonuc siralamasi
+# Bu ikisinin SKORLARI birbiriyle KARSILASTIRILAMAZ - CLIP'in
+# skorlari 0-1 arasi cosine similarity, BM25'inkiler ise 0'dan
+# yukari (10, 20 gibi) sinirsiz sayilar olabilir. Ikisini dogrudan
+# toplayip "ortalama" almak ANLAMSIZ olur - farkli olcum birimleri.
+#
+# COZUM: RRF, SKORLARI DEGIL, SIRALARI (rank) kullanir. Yani "bu
+# gorsel CLIP'te 3. sirada, BM25'te 7. sirada" gibi bilgiyi kullanir -
+# skorlarin BUYUKLUGU onemli degil, sadece SIRASI onemli. Bu, RRF'yi
+# hem basit hem de "adil" (iki farkli sistemi taraf tutmadan
+# birlestiren) bir yontem yapar.
+#
+# FORMUL: Her gorsel icin, HER LISTEDE bulundugu sira numarasina
+# gore bir "RRF skoru" hesaplanir:
+#
+#     RRF_skoru = sum( 1 / (k + sira) )
+#
+# Bu toplam, gorselin GECTIGI HER LISTE icin ayri ayri hesaplanip
+# TOPLANIR. Yani bir gorsel hem CLIP'te hem BM25'te ust siralarda
+# ciktiysa, iki kere "puan" alir ve toplam RRF skoru yuksek cikar -
+# bu da onun NIHAI siralamada one cikmasini saglar.
+#
+# k=60 SABITI NEREDEN GELIYOR? Bu, RRF'nin orijinal akademik
+# makalesinde (Cormack, Clarke, Buettcher 2009) onerilen ve
+# pratikte iyi sonuc verdigi gozlemlenen standart bir deger.
+# k'nin gorevi: siralamanin BASINDAKI (1., 2., 3. sira) farklarin
+# etkisini biraz "yumusatmak" - k olmasa 1. sira ile 2. sira arasi
+# skor farki cok BUYUK olurdu (1/1=1.0 vs 1/2=0.5, yani %50 fark),
+# k=60 eklenince bu fark kuculuyor (1/61=0.0164 vs 1/62=0.0161,
+# yani sadece %2 fark) - boylece siralamanin ALT kisimlarindaki
+# kucuk farklar da anlamli katki yapabiliyor.
+# ============================================================
+
+
+def reciprocal_rank_fusion(sonuc_listeleri, k=60, agirliklar=None):
+    """
+    Birden fazla arama sonucu listesini RRF ile tek bir siralamada
+    birlestirir.
+
+    agirliklar: (YENI, istege bagli) her listenin katkisini carpan
+    agirlik listesi, sonuc_listeleri ile AYNI uzunlukta olmali.
+    None verilirse tum listeler esit agirlikli (1.0) sayilir; bu,
+    eski davranisla BIREBIR aynidir.
+
+    Formul: RRF_skoru = sum( agirlik / (k + sira) )
+    """
+    # Agirlik verilmediyse her liste icin 1.0 kullan (eski davranis)
+    if agirliklar is None:
+        agirliklar = [1.0] * len(sonuc_listeleri)
+    # Agirlik sayisi liste sayisiyla uyusmuyorsa sessizce yanlis hesaplamak
+    # yerine hemen hata ver
+    if len(agirliklar) != len(sonuc_listeleri):
+        raise ValueError("agirliklar, sonuc_listeleri ile ayni uzunlukta olmali")
+
+    # Her kimligin toplam RRF skorunu bu sozlukte biriktiriyoruz
+    rrf_skorlari = {}
+
+    # zip: her listeyi KENDI agirligiyla birlikte geziyoruz
+    for liste, agirlik in zip(sonuc_listeleri, agirliklar):
+        # Listedeki her elemani 1'den baslayan sira numarasiyla geziyoruz
+        for sira, kimlik in enumerate(liste, start=1):
+            # Katki payi: agirlik / (k + sira). Agirlik 1.0 ise eski formulle ayni
+            katki = agirlik / (k + sira)
+            # Onceki skora ekle (kimlik ilk kez goruluyorsa 0'dan basla)
+            rrf_skorlari[kimlik] = rrf_skorlari.get(kimlik, 0) + katki
+
+    # Skora gore buyukten kucuge sirala
+    siralanmis_sonuclar = sorted(
+        rrf_skorlari.items(), key=lambda x: x[1], reverse=True
+    )
+
+    return siralanmis_sonuclar
+
+
+# Bu dosya dogrudan calistirildiginda, RRF'nin nasil calistigini
+# GORECEKTIGIMIZ basit, elle hazirlanmis bir ornekle test ediyoruz -
+# gercek CLIP/BM25 verisi kullanmadan, sadece MANTIGIN dogru
+# calistigini dogruluyoruz.
+if __name__ == "__main__":
+    # Elle hazirlanmis, sahte (ornek) iki arama sonucu listesi.
+    clip_sonucu = ["A", "B", "C", "D"]
+    bm25_sonucu = ["C", "A", "E", "F"]
+
+    print("CLIP sonucu (sirali):", clip_sonucu)
+    print("BM25 sonucu (sirali):", bm25_sonucu)
+
+    birlesik = reciprocal_rank_fusion([clip_sonucu, bm25_sonucu])
+
+    print("\nRRF ile birlesmis nihai siralama:")
+    for kimlik, skor in birlesik:
+        print(f"  {kimlik}: {skor:.4f}")
+
+    # BEKLENEN SONUC: "A" ve "C" ikisi de HER IKI listede de var
+    # (A: CLIP'te 1., BM25'te 2. | C: CLIP'te 3., BM25'te 1.) -
+    # bu yuzden A ve C'nin RRF skoru, sadece TEK bir listede olan
+    # B, D, E, F'den DAHA YUKSEK cikmali. Bu, hibrit aramanin
+    # temel mantigi: "iki yontemde de one cikan sonuc, kazanir."
+
+========================================
+--- DOSYA: .\search\test_hybrid_gorsel.py ---
+========================================
+
+# ============================================================
+# Bu script, hibrit_ara() fonksiyonunun bulduğu sonuclari, dosya
+# adlarini elle aramaya GEREK KALMADAN, dogrudan ekranda GORSEL
+# olarak gosterir.
+#
+# ONCEKI VERSIYONDAN FARKI: Artik sorgulari KOD ICINE YAZILI olarak
+# tutmuyoruz - program calisinca TERMINALDE senden sorguyu soruyor,
+# sen yaziyorsun. Boylece her yeni sorgu denemek istediginde dosyayi
+# ACIP DUZENLEMENE gerek kalmiyor.
+# ============================================================
+
+import matplotlib.pyplot as plt
+from PIL import Image
+
+from hybrid_search import hibrit_ara
+
+
+def sorgu_ara_ve_goster(sorgu_metni, k=5):
+    """
+    hibrit_ara() fonksiyonunu cagirir, donen sonuclari (dosya
+    yolu + RRF skoru ciftlerini) ekranda kucuk resimler halinde
+    yan yana gosterir.
+    """
+    sonuclar = hibrit_ara(sorgu_metni, k=k)
+
+    fig, eksenler = plt.subplots(1, k, figsize=(4 * k, 4))
+    fig.suptitle(f"Hibrit Arama Sorgusu: '{sorgu_metni}'", fontsize=16)
+
+    for sira, (dosya_yolu, skor) in enumerate(sonuclar):
+        gorsel = Image.open(dosya_yolu)
+        eksenler[sira].imshow(gorsel)
+        eksenler[sira].set_title(f"#{sira+1}\nRRF: {skor:.4f}", fontsize=10)
+        eksenler[sira].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
+# ============================================================
+# ANA DONGU: Program calisinca surekli terminalde sorgu bekler.
+# Sen bir sorgu yazip Enter'a basinca, sonuclari gorsel olarak
+# gosterir, pencereyi kapatinca tekrar sorgu sorar. Cikmak icin
+# "q" yazip Enter'a basman yeterli.
+# ============================================================
+if __name__ == "__main__":
+    print("Hibrit arama test araci. Cikmak icin 'q' yazip Enter'a bas.\n")
+
+    while True:
+        # input(): terminalde kullaniciya bir mesaj gosterip, onun
+        # yazdigi metni (Enter'a basana kadar olani) geri dondurur.
+        sorgu = input("Aranacak sorguyu yaz: ").strip()
+
+        # strip(): basta/sonda bosluk varsa temizler. Eger sorgu
+        # bossa (sadece Enter'a basildiysa) veya "q" ise, dongudden
+        # cikiyoruz.
+        if sorgu.lower() == "q":
+            print("Cikiliyor...")
+            break
+
+        if not sorgu:
+            print("Bos sorgu girdin, tekrar dene.\n")
+            continue
+
+        sorgu_ara_ve_goster(sorgu)
+
+========================================
+--- DOSYA: .\search\unsplash_esik_kalibrasyon.py ---
+========================================
+
+# ============================================================
+# Bu script, "0.29 esiginin Unsplash gorselleri icin de dogru olup
+# olmadigini" OLCEREK test eder - tahmin etmeyelim, COCO'da yaptigimiz
+# gibi burada da GERCEK veriyle kalibre edelim.
+#
+# MANTIK: "a dog" gibi, Unsplash'te KESINLIKLE gercekten alakali
+# gorseller olmasi beklenen bir sorgu kullanip, Unsplash'in donduğu
+# ilk birkac sonucun CLIP skorlarina bakiyoruz. Eger bu skorlar da
+# 0.29'un ALTINDA kaliyorsa, bu SORUNUN esik degil, Unsplash
+# gorsellerinin CLIP tarafindan SISTEMATIK OLARAK daha dusuk
+# puanlanmasi oldugunu KANITLAR.
+# ============================================================
+
+import sys
+import os
+
+sys.path.append(os.path.dirname(__file__))
+from hybrid_search import _unsplash_sonucunu_clip_ile_puanla
+from external_search import unsplash_ile_ara
+
+# "a dog" -> Unsplash'te KESINLIKLE gercek, acik ara alakali
+# kopek fotograflari olmasi beklenir. Eger bunlarin CLIP skoru da
+# dusuk cikarsa, sorun Unsplash gorsellerinin DOGASINDA.
+KESIN_ILGILI_SORGULAR = ["a dog", "a cat", "a bicycle", "a kitchen"]
+
+
+def calistir():
+    for sorgu in KESIN_ILGILI_SORGULAR:
+        print(f"\n--- Sorgu: '{sorgu}' ---")
+        adaylar = unsplash_ile_ara(sorgu, k=5)
+        for aday in adaylar:
+            skor = _unsplash_sonucunu_clip_ile_puanla(aday["url"], sorgu)
+            print(f"  CLIP skoru: {skor:.4f}")
+
+
+if __name__ == "__main__":
+    calistir()
+
+========================================
+--- DOSYA: .\search\visual_judge.py ---
+========================================
+
+# ============================================================
+# Bu dosya, CLIP esigini gecen gorsellerin kullanici sorgusunu
+# gercekten karsilayip karsilamadigini Groq VLM (qwen/qwen3.8-27b)
+# ile denetler.
+# ============================================================
+
+import os
+import io
+import time
+import base64
+from PIL import Image
+from groq import Groq
+from dotenv import load_dotenv
+
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+VLM_MODEL = "qwen/qwen3.8-27b"
+
+_vlm_client = None
+
+
+def _client_olustur():
+    global _vlm_client
+    if _vlm_client is None:
+        if not GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY bulunamadi (.env dosyasini kontrol et).")
+        _vlm_client = Groq(api_key=GROQ_API_KEY)
+    return _vlm_client
+
+
+def _gorseli_kucult_ve_kodla(gorsel_yolu, maks_boyut=384):
+    """Gorseli 384x384 boyuta kuculterek token harcamasini ve gecikmeyi azaltir."""
+    with Image.open(gorsel_yolu) as img:
+        img = img.convert("RGB")
+        img.thumbnail((maks_boyut, maks_boyut))
+        tampon = io.BytesIO()
+        img.save(tampon, format="JPEG", quality=80)
+        return base64.b64encode(tampon.getvalue()).decode("utf-8")
+
+
+def gorsel_hakem_onayla(gorsel_yolu, sorgu_metni):
+    """
+    Gorsel sorguyu tam olarak karsiliyorsa True, aksi halde False dondurur.
+    """
+    talimat = (
+        "You are a strict visual relevance judge for an image search engine.\n"
+        f"User query: '{sorgu_metni}'\n\n"
+        "Does this image clearly and accurately show EVERY key element, attribute, "
+        "color, and spatial relation in the user query?\n"
+        "Strict Rules:\n"
+        "1. Every requested object, color, and feature must be clearly visible.\n"
+        "2. If a specific feature/costume is requested (e.g. wings, horns, mustache), "
+        "it must actually be on that subject. A normal collar, bandana, scarf, or bow tie "
+        "does NOT count as wings.\n"
+        "3. Spatial relations (in front of, on top of, riding) and colors (e.g. blue car AND yellow house) "
+        "must both be true at the same time.\n"
+        "Answer with ONLY one word: yes or no."
+    )
+
+    client = _client_olustur()
+    b64_gorsel = _gorseli_kucult_ve_kodla(gorsel_yolu)
+
+    for deneme in range(2):
+        try:
+            cevap = client.chat.completions.create(
+                model=VLM_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": talimat},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64_gorsel}"},
+                        },
+                    ],
+                }],
+                temperature=0.0,
+                max_completion_tokens=10,
+                reasoning_effort="none",
+            )
+
+            yanit = (cevap.choices[0].message.content or "").strip().lower()
+            onay = yanit.startswith("yes")
+            print(f"    [VLM Hakem] Karar: {'ONAY (yes)' if onay else 'RED (no)'} (yanit: {yanit!r})")
+            return onay
+
+        except Exception as hata:
+            if deneme == 0 and "429" in str(hata):
+                print("    [VLM Hakem] Hiz siniri (429), 2 sn beklenip tekrar deneniyor...")
+                time.sleep(2.0)
+                continue
+            # Hata durumunda onaysiz/alakasiz gorselin sizmasini onlemek icin False donuyoruz
+            print(f"    [VLM Hakem UYARI] Cagri basarisiz ({hata}), guvenlik icin RED sayildi.")
+            return False
+    return False
+
+========================================
+--- DOSYA: .\tests\test_api.py ---
+========================================
+
+# ============================================================
+# Bu dosya, projenin UCTAN UCA calistigini dogrulayan basit bir
+# entegrasyon testidir. "Entegrasyon testi" demek: tek bir fonksiyonu
+# degil, BIRDEN FAZLA parcanin (API + arama mantigi + modeller)
+# BIRLIKTE dogru calistigini test etmek demek.
+#
+# NASIL CALISTIRILIR? Once API'nin AYAKTA olmasi lazim (ayri bir
+# terminalde "uvicorn api.main:app --reload" calisiyor olmali),
+# sonra bu test dosyasi calistirilir - test, GERCEK bir HTTP istegi
+# atar, tipki Swagger arayuzunde elle yaptigimiz gibi, ama bu sefer
+# OTOMATIK ve TEKRARLANABILIR sekilde.
+# ============================================================
+
+import requests
+
+API_ADRESI = "http://127.0.0.1:8000"
+
+
+def test_saglik_kontrolu():
+    """
+    /health endpoint'inin calistigini ve dogru formatta cevap
+    verdigini kontrol eder.
+    """
+    cevap = requests.get(f"{API_ADRESI}/health")
+
+    # assert: bu kosul DOGRU degilse, test BASARISIZ sayilir ve
+    # bir hata firlatir. Testin "iddia ettigi" sey budur.
+    assert cevap.status_code == 200, "Health check basarisiz oldu!"
+    assert cevap.json().get("durum") == "calisiyor", "Beklenmeyen cevap formati!"
+
+    print("test_saglik_kontrolu: BASARILI")
+
+
+def test_metin_arama():
+    """
+    /search/text endpoint'inin basit bir sorguya DOGRU FORMATTA
+    cevap verdigini kontrol eder. Sonucun ICERIGINI (hangi gorsel
+    geldi gibi) degil, sadece YAPISININ dogru oldugunu kontrol
+    ediyoruz - bu, "sistem coktu mu" sorusuna cevap veren bir test,
+    "sonuclar mukemmel mi" sorusuna degil (o, Faz 4'teki evaluate.py'nin isi).
+    """
+    cevap = requests.post(
+        f"{API_ADRESI}/search/text",
+        json={"sorgu": "a dog", "k": 3},
+        timeout=180,  # uretim katmanina duserse uzun surebilir
+    )
+
+    assert cevap.status_code == 200, "Metin arama istegi basarisiz oldu!"
+
+    veri = cevap.json()
+    assert "kaynak" in veri, "Cevapta 'kaynak' alani eksik!"
+    assert veri["kaynak"] in ["yerel", "harici", "uretilen"], "Gecersiz kaynak degeri!"
+    assert "sonuclar" in veri, "Cevapta 'sonuclar' alani eksik!"
+    assert len(veri["sonuclar"]) > 0, "Hic sonuc donmedi!"
+
+    print(f"test_metin_arama: BASARILI (kaynak: {veri['kaynak']})")
+
+
+if __name__ == "__main__":
+    print("Entegrasyon testleri baslatiliyor...\n")
+    print("NOT: API'nin ayri bir terminalde calisiyor olmasi gerekiyor")
+    print("(uvicorn api.main:app --reload)\n")
+
+    test_saglik_kontrolu()
+    test_metin_arama()
+
+    print("\nTum testler basariyla tamamlandi!")
+
+========================================
+--- DOSYA: .\ui\app.py ---
+========================================
+
+import os
+import streamlit as st
+import requests
+from PIL import Image
+
+API_ADRESI = os.getenv("API_ADRESI", "http://127.0.0.1:8000")
+
+st.set_page_config(page_title="Semantik Gorsel Arama Motoru", layout="wide")
+
+st.title("🔍 Semantik Görsel Arama Motoru")
+st.caption(
+    "Önce kendi veri setimde ararım, bulamazsam internetten (Unsplash & Openverse) "
+    "getirip Görsel Hakem (VLM) ile doğrularım, eksik kalanları yapay zeka ile üretirim."
+)
+
+sorgu = st.text_input("Ne aramak istersin?", placeholder="orn. a winged dog")
+k = st.slider("Kaç sonuç gösterilsin?", min_value=1, max_value=10, value=4)
+
+st.divider()
+st.subheader("📷 Veya bir görsel yükleyerek benzerlerini bul")
+
+yuklenen_dosya = st.file_uploader("Görsel seç", type=["jpg", "jpeg", "png", "webp", "bmp", "gif"])
+gorsel_ara_butonu = st.button("🔎 Bu Görsele Benzerlerini Bul")
+
+
+def _ogeyi_goster(oge):
+    """Listedeki her bir sonucu kendi veri yapisina gore ekrana basar."""
+    if isinstance(oge, (list, tuple)):
+        dosya_yolu, skor = oge
+        st.image(Image.open(dosya_yolu), use_container_width=True)
+        st.caption(f"📁 Yerel Veri Seti (RRF: {skor:.4f})")
+    elif isinstance(oge, dict):
+        if oge.get("kaynak") == "ai_uretim" or "dosya" in oge:
+            st.image(Image.open(oge["dosya"]), use_container_width=True)
+            model_adi = oge.get("model", "AI")
+            st.caption(f"🎨 AI ile üretildi ({model_adi})")
+        elif "url" in oge:
+            st.image(oge["url"], use_container_width=True)
+            platform = oge.get("kaynak", "web").capitalize()
+            st.caption(f"📷 {oge.get('fotografci', 'Anonim')} ({platform})")
+    elif isinstance(oge, str):
+        st.image(Image.open(oge), use_container_width=True)
+        st.caption("📁 Yerel Görsel Arama")
+
+
+if gorsel_ara_butonu and yuklenen_dosya is not None:
+    with st.spinner("Aranıyor..."):
+        try:
+            dosyalar = {"dosya": (yuklenen_dosya.name, yuklenen_dosya.getvalue())}
+            cevap = requests.post(
+                f"{API_ADRESI}/search/image",
+                files=dosyalar,
+                params={"k": k},
+                timeout=300,
+            )
+            cevap.raise_for_status()
+            sonuc = cevap.json()
+
+            skor_bilgisi = sonuc.get("en_iyi_skor", 0.0)
+            kaynak = sonuc.get("kaynak", "bilinmiyor")
+
+            if kaynak == "yerel_gorsel_arama":
+                st.success(f"Yüklediğin görsele en yakın sonuçlar (kendi veri setimizden, skor: {skor_bilgisi:.4f}):")
+            elif kaynak == "harici":
+                st.info(
+                    f"Kendi veri setimde yeterli benzerlik yoktu (skor: {skor_bilgisi:.4f}) - "
+                    f"görselin şu tarifiyle arandı: *{sonuc.get('gorselden_uretilen_tarif', '')}*"
+                )
+            elif kaynak == "uretilen":
+                st.warning(
+                    f"Kendi veri setimde ve internette bulunamadı (skor: {skor_bilgisi:.4f}) - "
+                    f"AI ile üretildi, tarif: *{sonuc.get('gorselden_uretilen_tarif', '')}*"
+                )
+
+            sonuclar_listesi = sonuc.get("sonuclar", [])
+            if sonuclar_listesi:
+                sutunlar = st.columns(len(sonuclar_listesi))
+                for sutun, oge in zip(sutunlar, sonuclar_listesi):
+                    with sutun:
+                        _ogeyi_goster(oge)
+
+        except Exception as hata:
+            st.error(f"Bir hata oluştu: {hata}")
+
+ara_butonu = st.button("🔎 Ara")
+
+if ara_butonu and sorgu.strip():
+    with st.spinner("Aranıyor ve Görsel Hakem ile doğrulanıyor... (eksik sonuç varsa AI ile tamamlanabilir)"):
+        try:
+            cevap = requests.post(
+                f"{API_ADRESI}/search/text",
+                json={"sorgu": sorgu, "k": k},
+                timeout=300,
+            )
+            cevap.raise_for_status()
+            sonuc = cevap.json()
+
+        except requests.exceptions.ConnectionError:
+            st.error(
+                "API'ye bağlanılamadı! `uvicorn api.main:app --reload` "
+                "komutunun ayrı bir terminalde çalıştığından emin ol."
+            )
+            st.stop()
+        except Exception as hata:
+            st.error(f"Bir hata oluştu: {hata}")
+            st.stop()
+
+    kaynak = sonuc.get("kaynak")
+    kismi_uretim = sonuc.get("kismi_uretim", False)
+
+    if kaynak == "yerel":
+        st.success(f"✅ Kendi veri setimde bulundu ve Görsel Hakem ile doğrulandı (CLIP skoru: {sonuc['en_iyi_skor']:.3f})")
+    elif kaynak == "harici" and kismi_uretim:
+        st.info(
+            "🌐✨ İnternette (Unsplash/Openverse) aranan kriterleri tam karşılayan sınırlı sayıda gerçek fotoğraf bulundu; "
+            "eksik kalan sonuçlar **Yapay Zeka (AI)** ile üretilerek tamamlandı."
+        )
+    elif kaynak == "harici":
+        st.info("🌐 Kendi veri setimde yeterli sonuç yoktu, bu görseller internetten getirilip Görsel Hakem ile doğrulandı.")
+    elif kaynak == "uretilen":
+        st.warning(
+            f"🎨 Ne kendi veri setimde ne de internette doğrulanmış sonuç bulunabildi - "
+            f"bu görseller YAPAY ZEKA TARAFINDAN ÜRETİLDİ.\n\n"
+            f"Kullanılan son zenginleştirilmiş prompt: *{sonuc.get('zenginlestirilmis_prompt', '')}*"
+        )
+
+    sonuclar = sonuc.get("sonuclar", [])
+
+    if not sonuclar:
+        st.warning("Hiç sonuç bulunamadı.")
+    else:
+        sutunlar = st.columns(len(sonuclar))
+        for sutun, oge in zip(sutunlar, sonuclar):
+            with sutun:
+                _ogeyi_goster(oge)

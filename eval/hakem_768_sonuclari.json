@@ -1,0 +1,164 @@
+{
+  "a red bicycle|https://images.unsplash.com/photo-1571333247701-6bb4d7314edd?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8MXx8YSUyMHJlZCUyMGJpY3ljbGV8ZW58MHx8fHwxNzkyNzk5MDQ0fDA&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a red bicycle",
+    "url": "https://images.unsplash.com/photo-1571333247701-6bb4d7314edd?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8MXx8YSUyMHJlZCUyMGJpY3ljbGV8ZW58MHx8fHwxNzkyNzk5MDQ0fDA&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a man holding an umbrella next to a dog|https://images.unsplash.com/photo-1754733009691-4e84f07676e6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8M3x8TWFuJTIwaG9sZGluZyUyMHVtYnJlbGxhJTIwYmVzaWRlJTIwZG9nfGVufDB8fHx8MTc5Mjc5OTAyNXww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a man holding an umbrella next to a dog",
+    "url": "https://images.unsplash.com/photo-1754733009691-4e84f07676e6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8M3x8TWFuJTIwaG9sZGluZyUyMHVtYnJlbGxhJTIwYmVzaWRlJTIwZG9nfGVufDB8fHx8MTc5Mjc5OTAyNXww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "A",
+    "boyut": 768,
+    "karar": true,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: ONAY (yes) (yanit: 'yes')"
+  },
+  "eiffel tower at night|https://images.unsplash.com/photo-1609971757431-439cf7b4141b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Mnx8ZWlmZmVsJTIwdG93ZXIlMjBhdCUyMG5pZ2h0fGVufDB8fHx8MTc5Mjc5OTA1NXww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "eiffel tower at night",
+    "url": "https://images.unsplash.com/photo-1609971757431-439cf7b4141b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Mnx8ZWlmZmVsJTIwdG93ZXIlMjBhdCUyMG5pZ2h0fGVufDB8fHx8MTc5Mjc5OTA1NXww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a cup on top of a laptop|https://images.unsplash.com/photo-1605362814200-8efc2d015560?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8NHx8YSUyMGN1cCUyMG9uJTIwdG9wJTIwb2YlMjBsYXB0b3B8ZW58MHx8fHwxNzkyNzk5MDExfDA&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a cup on top of a laptop",
+    "url": "https://images.unsplash.com/photo-1605362814200-8efc2d015560?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8NHx8YSUyMGN1cCUyMG9uJTIwdG9wJTIwb2YlMjBsYXB0b3B8ZW58MHx8fHwxNzkyNzk5MDExfDA&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a cat with a mustache|https://api.openverse.org/v1/images/951b8679-1543-40c5-a2bd-c9d0a03796ed/thumb/|768": {
+    "sorgu": "a cat with a mustache",
+    "url": "https://api.openverse.org/v1/images/951b8679-1543-40c5-a2bd-c9d0a03796ed/thumb/",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a horse with horns|https://images.unsplash.com/photo-1682709726423-0c920e6cb7a8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8MXx8YSUyMGhvcnNlJTIwd2l0aCUyMGhvcm5zfGVufDB8fHx8MTc5Mjc5ODkzNnww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a horse with horns",
+    "url": "https://images.unsplash.com/photo-1682709726423-0c920e6cb7a8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8MXx8YSUyMGhvcnNlJTIwd2l0aCUyMGhvcm5zfGVufDB8fHx8MTc5Mjc5ODkzNnww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "eiffel tower at night|https://images.unsplash.com/photo-1502602898657-3e91760cbb34?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8NXx8ZWlmZmVsJTIwdG93ZXIlMjBhdCUyMG5pZ2h0fGVufDB8fHx8MTc5Mjc5OTA1NXww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "eiffel tower at night",
+    "url": "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8NXx8ZWlmZmVsJTIwdG93ZXIlMjBhdCUyMG5pZ2h0fGVufDB8fHx8MTc5Mjc5OTA1NXww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a man holding an umbrella next to a dog|https://images.unsplash.com/photo-1754733009691-4e84f07676e6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8M3x8TWFuJTIwaG9sZGluZyUyMHVtYnJlbGxhJTIwYmVzaWRlJTIwZG9nfGVufDB8fHx8MTc5Mjc5OTAyNXww&ixlib=rb-4.1.0&q=80&w=1080|384": {
+    "sorgu": "a man holding an umbrella next to a dog",
+    "url": "https://images.unsplash.com/photo-1754733009691-4e84f07676e6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8M3x8TWFuJTIwaG9sZGluZyUyMHVtYnJlbGxhJTIwYmVzaWRlJTIwZG9nfGVufDB8fHx8MTc5Mjc5OTAyNXww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "A",
+    "boyut": 384,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a cat riding a skateboard|https://images.unsplash.com/photo-1700095396561-737b96f9de6c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8M3x8YSUyMGNhdCUyMHJpZGluZyUyMGElMjBza2F0ZWJvYXJkfGVufDB8fHx8MTc5Mjc5ODk2Mnww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a cat riding a skateboard",
+    "url": "https://images.unsplash.com/photo-1700095396561-737b96f9de6c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8M3x8YSUyMGNhdCUyMHJpZGluZyUyMGElMjBza2F0ZWJvYXJkfGVufDB8fHx8MTc5Mjc5ODk2Mnww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a cat with a mustache|https://images.unsplash.com/photo-1692005707297-289963f8c6ab?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Mnx8Y2F0JTIwd2VhcmluZyUyMG11c3RhY2hlfGVufDB8fHx8MTc5Mjc5ODkyM3ww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a cat with a mustache",
+    "url": "https://images.unsplash.com/photo-1692005707297-289963f8c6ab?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Mnx8Y2F0JTIwd2VhcmluZyUyMG11c3RhY2hlfGVufDB8fHx8MTc5Mjc5ODkyM3ww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": true,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: ONAY (yes) (yanit: 'yes')"
+  },
+  "a blue car in front of a yellow house|https://images.unsplash.com/photo-1791283701392-de9cc91fb85a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8OHx8Ymx1ZSUyMGNhciUyMGluJTIwZnJvbnQlMjBvZiUyMHllbGxvdyUyMGhvdXNlfGVufDB8fHx8MTc5Mjc5ODk5M3ww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a blue car in front of a yellow house",
+    "url": "https://images.unsplash.com/photo-1791283701392-de9cc91fb85a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8OHx8Ymx1ZSUyMGNhciUyMGluJTIwZnJvbnQlMjBvZiUyMHllbGxvdyUyMGhvdXNlfGVufDB8fHx8MTc5Mjc5ODk5M3ww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a blue car in front of a yellow house|https://images.unsplash.com/photo-1778961420156-624d5983943d?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Mnx8Ymx1ZSUyMGNhciUyMGluJTIwZnJvbnQlMjBvZiUyMHllbGxvdyUyMGhvdXNlfGVufDB8fHx8MTc5Mjc5ODk5M3ww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a blue car in front of a yellow house",
+    "url": "https://images.unsplash.com/photo-1778961420156-624d5983943d?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Mnx8Ymx1ZSUyMGNhciUyMGluJTIwZnJvbnQlMjBvZiUyMHllbGxvdyUyMGhvdXNlfGVufDB8fHx8MTc5Mjc5ODk5M3ww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "a blue car in front of a yellow house|https://images.unsplash.com/photo-1762804897582-6ae6cd8cfbbd?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Nnx8Ymx1ZSUyMGNhciUyMGluJTIwZnJvbnQlMjBvZiUyMHllbGxvdyUyMGhvdXNlfGVufDB8fHx8MTc5Mjc5ODk5M3ww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a blue car in front of a yellow house",
+    "url": "https://images.unsplash.com/photo-1762804897582-6ae6cd8cfbbd?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Nnx8Ymx1ZSUyMGNhciUyMGluJTIwZnJvbnQlMjBvZiUyMHllbGxvdyUyMGhvdXNlfGVufDB8fHx8MTc5Mjc5ODk5M3ww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": false,
+    "cikti": "[VLM Hakem] Karar: RED (no) (yanit: 'no')"
+  },
+  "winged dog|https://images.unsplash.com/photo-1616096245310-b0a9818a0ee9?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8OHx8ZG9nJTIwd2VhcmluZyUyMHdpbmdzfGVufDB8fHx8MTc5Mjc5Mjc2NXww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "winged dog",
+    "url": "https://images.unsplash.com/photo-1616096245310-b0a9818a0ee9?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8OHx8ZG9nJTIwd2VhcmluZyUyMHdpbmdzfGVufDB8fHx8MTc5Mjc5Mjc2NXww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": true,
+    "cikti": "[VLM Hakem] Hiz siniri (429), 2 sn beklenip tekrar deneniyor...\n    [VLM Hakem UYARI] Cagri basarisiz (Error code: 429 - {'error': {'message': 'Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01m3mdb2q4e15rrhqy22y3273p` service tier `on_demand` on tokens per day (TPD): Limit 200"
+  },
+  "a cat with a mustache|https://api.openverse.org/v1/images/fe984356-734c-45cb-af04-6baec65e433a/thumb/|768": {
+    "sorgu": "a cat with a mustache",
+    "url": "https://api.openverse.org/v1/images/fe984356-734c-45cb-af04-6baec65e433a/thumb/",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": true,
+    "cikti": "[VLM Hakem] Hiz siniri (429), 2 sn beklenip tekrar deneniyor...\n    [VLM Hakem UYARI] Cagri basarisiz (Error code: 429 - {'error': {'message': 'Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01m3mdb2q4e15rrhqy22y3273p` service tier `on_demand` on tokens per day (TPD): Limit 200"
+  },
+  "winged dog|https://images.unsplash.com/photo-1780105200980-184ed6fff562?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8NHx8ZG9nJTIwd2VhcmluZyUyMHdpbmdzfGVufDB8fHx8MTc5Mjc5Mjc2NXww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "winged dog",
+    "url": "https://images.unsplash.com/photo-1780105200980-184ed6fff562?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8NHx8ZG9nJTIwd2VhcmluZyUyMHdpbmdzfGVufDB8fHx8MTc5Mjc5Mjc2NXww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": true,
+    "cikti": "[VLM Hakem] Hiz siniri (429), 2 sn beklenip tekrar deneniyor...\n    [VLM Hakem UYARI] Cagri basarisiz (Error code: 429 - {'error': {'message': 'Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01m3mdb2q4e15rrhqy22y3273p` service tier `on_demand` on tokens per day (TPD): Limit 200"
+  },
+  "a cat with a mustache|https://images.unsplash.com/photo-1752010528478-d3fc732f877d?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8MXx8Y2F0JTIwd2VhcmluZyUyMG11c3RhY2hlfGVufDB8fHx8MTc5Mjc5ODkyM3ww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a cat with a mustache",
+    "url": "https://images.unsplash.com/photo-1752010528478-d3fc732f877d?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8MXx8Y2F0JTIwd2VhcmluZyUyMG11c3RhY2hlfGVufDB8fHx8MTc5Mjc5ODkyM3ww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "A",
+    "boyut": 768,
+    "karar": false,
+    "hata": true,
+    "cikti": "[VLM Hakem] Hiz siniri (429), 2 sn beklenip tekrar deneniyor...\n    [VLM Hakem UYARI] Cagri basarisiz (Error code: 429 - {'error': {'message': 'Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01m3mdb2q4e15rrhqy22y3273p` service tier `on_demand` on tokens per day (TPD): Limit 200"
+  },
+  "a cat riding a skateboard|https://images.unsplash.com/photo-1569728461937-841f045fdb44?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Nnx8YSUyMGNhdCUyMHJpZGluZyUyMGElMjBza2F0ZWJvYXJkfGVufDB8fHx8MTc5Mjc5ODk2Mnww&ixlib=rb-4.1.0&q=80&w=1080|768": {
+    "sorgu": "a cat riding a skateboard",
+    "url": "https://images.unsplash.com/photo-1569728461937-841f045fdb44?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3wxMDcwNTY5fDB8MXxzZWFyY2h8Nnx8YSUyMGNhdCUyMHJpZGluZyUyMGElMjBza2F0ZWJvYXJkfGVufDB8fHx8MTc5Mjc5ODk2Mnww&ixlib=rb-4.1.0&q=80&w=1080",
+    "grup": "B",
+    "boyut": 768,
+    "karar": false,
+    "hata": true,
+    "cikti": "[VLM Hakem] Hiz siniri (429), 2 sn beklenip tekrar deneniyor...\n    [VLM Hakem UYARI] Cagri basarisiz (Error code: 429 - {'error': {'message': 'Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01m3mdb2q4e15rrhqy22y3273p` service tier `on_demand` on tokens per day (TPD): Limit 200"
+  }
+}

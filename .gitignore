@@ -1,0 +1,26 @@
+# Veri ve model dosyalari (buyuk, repoya girmemeli)
+data/raw_images/
+data/*.npy
+data/*.faiss
+index/*.faiss
+index/*.index
+*.pth
+*.pt
+*.onnx
+
+# Ortam
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Notebook checkpoint
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

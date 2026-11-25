@@ -1,0 +1,48 @@
+# ============================================================
+# Bu dosya, FastAPI servisimizi (api/main.py) bir Docker container'i
+# icine paketlemek icin "tarif" (recipe) gorevi gorur. Docker, bu
+# dosyayi okuyup adim adim bir "image" (imaj) olusturur - image,
+# calisan bir programin ve TUM bagimliliklarinin (Python, kutuphaneler,
+# kodun kendisi) tek bir pakette dondurulmus hali gibi dusunulebilir.
+# ============================================================
+
+# FROM: hangi TEMEL imajdan baslayacagimizi belirtir. python:3.11-slim,
+# icinde Python 3.11 kurulu, gereksiz eklentilerden arindirilmis
+# (slim) kucuk bir Linux imaji - boylece kendi Python'umuzu sifirdan
+# kurmamiza gerek kalmiyor.
+FROM python:3.11-slim
+
+# WORKDIR: container'in ICINDE calisacagimiz klasoru belirler - tipki
+# terminalde "cd /app" yapmak gibi. Bundan sonraki tum komutlar bu
+# klasorun icinde calisir.
+WORKDIR /app
+
+# COPY: bilgisayarindaki (host) dosyalari container'in ICINE kopyalar.
+# Once SADECE requirements.txt'i kopyaliyoruz (henuz butun kodu degil) -
+# bu, Docker'in "katman onbellegi" (layer caching) mantigindan
+# faydalanmak icin bir optimizasyon: eger sadece KODUNU degistirirsen
+# (requirements.txt'i degil), Docker bu adimi TEKRAR calistirmaz,
+# onceki calistirmadan kalan sonucu kullanir - bu, image'i yeniden
+# olustururken zamandan tasarruf sağlar.
+COPY requirements.txt .
+
+# RUN: container'in ICINDE bir komut calistirir - burada pip ile
+# tum bagimliliklari kuruyoruz. --no-cache-dir: pip'in kendi
+# onbellegini TUTMAMASINI sagliyoruz, boylece image'in boyutu
+# gereksiz yere buyumez.
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Simdi PROJENIN TAMAMINI kopyaliyoruz (kod, veri, index dosyalari vb.)
+COPY . .
+
+# EXPOSE: bu container'in HANGI PORTTAN disariya konustugunu
+# BELGELIYOR (dokumantasyon amacli, gercek port acmayi asagida
+# docker-compose.yml yapacak).
+EXPOSE 8000
+
+# CMD: container BASLATILDIGINDA calistirilacak KOMUT. --host 0.0.0.0
+# ONEMLI: bu, API'nin SADECE container'in kendi icinden degil,
+# DISARIDAN da (senin bilgisayarindan, tarayicidan) erisilebilir
+# olmasini sagliyor - "127.0.0.1" yerine "0.0.0.0" kullanmak,
+# container ortamlarinda STANDART bir gerekliliktir.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
